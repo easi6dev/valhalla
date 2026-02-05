@@ -3,6 +3,10 @@ package global.tada.valhalla
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.CompletableFuture
 
 /**
@@ -29,6 +33,12 @@ import java.util.concurrent.CompletableFuture
  */
 class Actor(config: String) : AutoCloseable {
 
+    enum class OperatingSystem(val identifier: String, val suffix: String, val isPosix: Boolean = true) {
+        WINDOWS("win", ".dll", isPosix = false), // only supports amd64
+        LINUX("linux", ".so"), // both supports amd64 and arm64
+        MAC("mac", ".dylib") // only supports arm64
+    }
+
     companion object {
         private val logger = LoggerFactory.getLogger(Actor::class.java)
         private const val LIBRARY_NAME = "valhalla_jni"
@@ -47,6 +57,49 @@ class Actor(config: String) : AutoCloseable {
                 synchronized(this) {
                     if (!libraryLoaded) {
                         try {
+                            val osName = System.getProperty("os.name")
+                            val os = when {
+                                osName.contains("mac") -> OperatingSystem.MAC
+                                osName.contains("win") -> OperatingSystem.WINDOWS
+                                else -> OperatingSystem.LINUX
+                            }
+                            val arch = when (val arch = System.getProperty("os.arch")) {
+                                "amd64",
+                                "x86_64" -> "amd64"
+                                "aarch64" -> "arm64"
+                                else -> throw ValhallaException("Unsupported operating system: $arch")
+                            }
+
+                            val libraryFiles = this::class.java.classLoader.let {
+                                listOfNotNull(
+                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/valhalla_jni.dll"),
+                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/abseil_dll.dll"),
+                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/libcurl.dll"),
+                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/libprotobuf-lite.dll"),
+                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/lz4.dll"),
+                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/zlib1.dll")
+                                )
+                            }
+
+                            libraryFiles.forEach { libraryFile ->
+                                val file = File(libraryFile.path)
+                                file.inputStream().use { stream ->
+                                    val newFile = if (os.isPosix) {
+                                        val attr = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))
+                                        Files.createTempFile(file.name, os.suffix, attr).toFile()
+                                    } else {
+                                        val file = Files.createTempFile(file.name, os.suffix).toFile()
+                                        file.setReadable(true, true);
+                                        file.setWritable(true, true);
+                                        file.setExecutable(true, true);
+                                        file
+                                    }.also { it.deleteOnExit() }
+                                    FileOutputStream(newFile).use { newStream ->
+                                        newStream.write(stream.readBytes())
+                                    }
+                                }
+                            }
+
                             System.loadLibrary(LIBRARY_NAME)
                             libraryLoaded = true
                             logger.info("Successfully loaded native library: {}", LIBRARY_NAME)

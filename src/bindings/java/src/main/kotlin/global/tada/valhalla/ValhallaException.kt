@@ -6,7 +6,7 @@ package global.tada.valhalla
  * @property message Exception message
  * @property cause Optional underlying cause
  */
-class ValhallaException(
+class ValhallaException @JvmOverloads constructor(
     message: String,
     cause: Throwable? = null
 ) : RuntimeException(message, cause)

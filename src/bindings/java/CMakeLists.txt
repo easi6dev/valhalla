@@ -2,6 +2,21 @@ cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 
 project(valhalla-jni)
 
+# Determine if we're being built as part of the main Valhalla project or standalone
+if(NOT DEFINED VALHALLA_SOURCE_DIR)
+    # Standalone build - set VALHALLA_SOURCE_DIR to parent directory
+    get_filename_component(VALHALLA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+    message(STATUS "Standalone build detected, VALHALLA_SOURCE_DIR: ${VALHALLA_SOURCE_DIR}")
+
+    # For standalone builds, we need to find the valhalla library
+    # Assume it's already built in the parent project
+    if(NOT TARGET valhalla)
+        message(WARNING "valhalla target not found. Make sure Valhalla is built first in the parent directory.")
+    endif()
+else()
+    message(STATUS "Building as part of main Valhalla project")
+endif()
+
 # Find JNI
 find_package(JNI REQUIRED)
 
@@ -26,6 +41,9 @@ set_target_properties(valhalla_jni PROPERTIES
 # Include directories
 target_include_directories(valhalla_jni PRIVATE
     ${JNI_INCLUDE_DIRS}
+    ${VALHALLA_SOURCE_DIR}           # For valhalla/baldr/*, valhalla/midgard/*, etc.
+    ${VALHALLA_SOURCE_DIR}/src       # For config.h and other src headers
+    ${VALHALLA_SOURCE_DIR}/third_party/rapidjson/include
 )
 
 # Link libraries

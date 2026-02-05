@@ -42,7 +42,7 @@ tasks.test {
 
     // Native library path 설정
     systemProperty("java.library.path",
-        "${project.buildDir}/libs/native:${System.getProperty("java.library.path")}")
+        "${project.buildDir}/libs/native/Release:${System.getProperty("java.library.path")}")
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
@@ -61,6 +61,10 @@ tasks.register<Exec>("buildNative") {
     description = "Build native JNI library using CMake"
 
     workingDir = projectDir
+
+    onlyIf {
+        file("${project.buildDir}/libs/native/Release").listFiles().isEmpty()
+    }
 
     // Windows에서는 cmd를 통해 실행
     if (System.getProperty("os.name").lowercase().contains("windows")) {
