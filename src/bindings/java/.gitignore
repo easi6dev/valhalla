@@ -31,13 +31,6 @@ Makefile
 *.cmake
 !CMakeLists.txt
 
-# Native
-*.so
-*.dylib
-*.dll
-*.a
-*.lib
-
 # Java
 *.class
 *.jar

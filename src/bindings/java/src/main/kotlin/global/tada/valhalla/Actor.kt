@@ -8,6 +8,7 @@ import java.io.FileOutputStream
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.CompletableFuture
+import kotlin.io.path.exists
 
 /**
  * Main Actor class for Valhalla routing engine.
@@ -59,8 +60,8 @@ class Actor(config: String) : AutoCloseable {
                         try {
                             val osName = System.getProperty("os.name")
                             val os = when {
-                                osName.contains("mac") -> OperatingSystem.MAC
-                                osName.contains("win") -> OperatingSystem.WINDOWS
+                                osName.contains("mac", ignoreCase = true) -> OperatingSystem.MAC
+                                osName.contains("win", ignoreCase = true) -> OperatingSystem.WINDOWS
                                 else -> OperatingSystem.LINUX
                             }
                             val arch = when (val arch = System.getProperty("os.arch")) {
@@ -70,25 +71,35 @@ class Actor(config: String) : AutoCloseable {
                                 else -> throw ValhallaException("Unsupported operating system: $arch")
                             }
 
+                            // copy the library files outside of jar
                             val libraryFiles = this::class.java.classLoader.let {
                                 listOfNotNull(
-                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/valhalla_jni.dll"),
-                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/abseil_dll.dll"),
-                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/libcurl.dll"),
-                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/libprotobuf-lite.dll"),
-                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/lz4.dll"),
-                                    it.getResource("lib/${os.identifier}-${arch}${os.suffix}/zlib1.dll")
+                                    it.getResource("lib/${os.identifier}-${arch}/abseil_dll${os.suffix}"),
+                                    it.getResource("lib/${os.identifier}-${arch}/libcurl${os.suffix}"),
+                                    it.getResource("lib/${os.identifier}-${arch}/libprotobuf-lite${os.suffix}"),
+                                    it.getResource("lib/${os.identifier}-${arch}/lz4${os.suffix}"),
+                                    it.getResource("lib/${os.identifier}-${arch}/zlib1${os.suffix}"),
+                                    it.getResource("lib/${os.identifier}-${arch}/valhalla_jni${os.suffix}"), // this should be the last entry!
                                 )
                             }
 
-                            libraryFiles.forEach { libraryFile ->
-                                val file = File(libraryFile.path)
-                                file.inputStream().use { stream ->
-                                    val newFile = if (os.isPosix) {
+                            println("Native libraries found in classpath: $libraryFiles")
+
+                            val targetDir = File(this::class.java.getProtectionDomain().codeSource.location.toURI().getPath())
+                                .parentFile.toPath()
+                            val files = libraryFiles.map { libraryFile ->
+                                println(libraryFile.file)
+                                println(libraryFile.file.split("/").last())
+                                val fileName = libraryFile.file.split("/").last()
+                                libraryFile.openStream().use { stream ->
+                                    val newFilePath = targetDir.resolve(fileName)
+                                    val newFile = if (newFilePath.exists()) {
+                                        File(newFilePath.toAbsolutePath().toString())
+                                    } else if (os.isPosix) {
                                         val attr = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))
-                                        Files.createTempFile(file.name, os.suffix, attr).toFile()
+                                        Files.createFile(newFilePath, attr).toFile()
                                     } else {
-                                        val file = Files.createTempFile(file.name, os.suffix).toFile()
+                                        val file = Files.createFile(newFilePath).toFile()
                                         file.setReadable(true, true);
                                         file.setWritable(true, true);
                                         file.setExecutable(true, true);
@@ -97,10 +108,13 @@ class Actor(config: String) : AutoCloseable {
                                     FileOutputStream(newFile).use { newStream ->
                                         newStream.write(stream.readBytes())
                                     }
+                                    println("Copied ${libraryFile.file} tp ${newFile.absolutePath}")
+                                    newFile.absolutePath
                                 }
                             }
 
-                            System.loadLibrary(LIBRARY_NAME)
+                            // load the valhalla_jni with absolute path
+                            files.forEach(System::load)
                             libraryLoaded = true
                             logger.info("Successfully loaded native library: {}", LIBRARY_NAME)
                         } catch (e: UnsatisfiedLinkError) {
