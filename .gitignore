@@ -25,11 +25,30 @@ CMakeLists.txt.user
 /.vs*/
 /*build*/
 /CMakeSettings.json
-.idea
+# IntelliJ IDEA
+.idea/*
+!.idea/modules.xml
+!.idea/misc.xml
+!.idea/gradle.xml
+*.iws
+out/
 /.tidytmp
 vcpkg*/
 *.log
 custom_files/
+
+# Gradle
+.gradle/
+**/build/
+!src/**/build/*.gradle
+*.gradle.kts.swp
+
+# Java bindings
+src/bindings/java/.gradle/
+src/bindings/java/build/
+!src/bindings/java/build.gradle.kts
+*.iml
+!valhalla.iml
 
 # python
 .venv
@@ -49,3 +68,37 @@ src/bindings/python/valhalla/__version__.py
 **/*.egg-info
 dist
 wheelhouse
+
+# temporary files
+temp/
+.temp/
+
+# OSM data files and generated tiles
+data/
+
+# Compiled native libraries (binaries should not be committed)
+*.so
+*.dll
+*.dylib
+src/bindings/java/src/main/resources/lib/**/*.so
+src/bindings/java/src/main/resources/lib/**/*.dll
+src/bindings/java/src/main/resources/lib/**/*.dylib
+
+# Gradle wrapper JAR (can be regenerated)
+src/bindings/java/gradle/wrapper/gradle-wrapper.jar
+
+# Test files (temporary)
+src/bindings/java/src/test/kotlin/global/tada/valhalla/MinimalTest.kt
+test-config.kt
+nul
+
+# Claude Code temporary files
+.claude/test_status.ps1
+.claude/status_debug.log
+
+# IDE module files (keep project-level config only)
+*.iml
+!valhalla.iml
+
+# Gradle caches
+src/bindings/java/gradle-8.5/

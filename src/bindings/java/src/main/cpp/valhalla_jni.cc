@@ -2,6 +2,7 @@
 #include <string>
 #include <memory>
 #include <stdexcept>
+#include <sstream>
 
 #include "baldr/rapidjson_utils.h"
 #include "config.h"
@@ -26,7 +27,8 @@ const boost::property_tree::ptree configure(const std::string& config) {
     boost::property_tree::ptree pt;
     try {
         // Parse the config and configure logging
-        rapidjson::read_json(config, pt);
+        std::stringstream stream(config);
+        rapidjson::read_json(stream, pt);
 
         auto logging_subtree = pt.get_child_optional("mjolnir.logging");
         if (logging_subtree) {

@@ -1,0 +1,101 @@
+{
+  "regions": {
+    "singapore": {
+      "name": "Singapore",
+      "enabled": true,
+      "osm_source": "https://download.geofabrik.de/asia/malaysia-singapore-brunei-latest.osm.pbf",
+      "bounds": {
+        "min_lat": 1.15,
+        "max_lat": 1.48,
+        "min_lon": 103.6,
+        "max_lon": 104.0
+      },
+      "tile_dir": "data/valhalla_tiles/singapore",
+      "default_costing": "auto",
+      "supported_costings": ["auto", "bicycle", "pedestrian", "motorcycle", "bus", "truck", "taxi"],
+      "costing_options": {
+        "auto": {
+          "maneuver_penalty": 5,
+          "country_crossing_penalty": 600,
+          "ferry_cost": 300,
+          "use_ferry": 0.5,
+          "shortest": false,
+          "speed_types": ["freeflow", "constrained", "predicted", "current"],
+          "top_speed": 90
+        },
+        "motorcycle": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 1.0,
+          "top_speed": 90
+        },
+        "taxi": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 1.0,
+          "top_speed": 90
+        },
+        "truck": {
+          "maneuver_penalty": 15,
+          "height": 4.11,
+          "width": 2.6,
+          "length": 21.5,
+          "weight": 42.0,
+          "axle_load": 9.0,
+          "use_highways": 1.0,
+          "use_tolls": 1.0
+        }
+      },
+      "timezone": "Asia/Singapore",
+      "locale": "en-SG",
+      "currency": "SGD"
+    },
+    "thailand": {
+      "name": "Thailand",
+      "enabled": false,
+      "osm_source": "https://download.geofabrik.de/asia/thailand-latest.osm.pbf",
+      "bounds": {
+        "min_lat": 5.61,
+        "max_lat": 20.46,
+        "min_lon": 97.34,
+        "max_lon": 105.64
+      },
+      "tile_dir": "data/valhalla_tiles/thailand",
+      "default_costing": "auto",
+      "supported_costings": ["auto", "bicycle", "pedestrian", "motorcycle", "bus", "truck"],
+      "costing_options": {
+        "auto": {
+          "maneuver_penalty": 5,
+          "country_crossing_penalty": 600,
+          "ferry_cost": 300,
+          "use_ferry": 0.5,
+          "shortest": false,
+          "speed_types": ["urban", "rural"]
+        },
+        "motorcycle": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 0.8
+        },
+        "truck": {
+          "maneuver_penalty": 15,
+          "height": 4.0,
+          "width": 2.5,
+          "length": 18.0,
+          "weight": 40.0,
+          "axle_load": 8.0,
+          "use_highways": 1.0,
+          "use_tolls": 0.9
+        }
+      },
+      "timezone": "Asia/Bangkok",
+      "locale": "th-TH",
+      "currency": "THB"
+    }
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "last_updated": "2026-02-09",
+    "description": "Multi-region configuration for Valhalla routing engine with JNI bindings"
+  }
+}

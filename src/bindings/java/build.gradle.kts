@@ -30,6 +30,9 @@ dependencies {
     // SLF4J for logging (optional, but recommended)
     implementation("org.slf4j:slf4j-api:2.0.13")
 
+    // JSON parsing (used in config classes)
+    implementation("org.json:json:20240303")
+
     // Testing
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")

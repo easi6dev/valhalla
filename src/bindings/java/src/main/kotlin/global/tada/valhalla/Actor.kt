@@ -129,6 +129,46 @@ class Actor(config: String) : AutoCloseable {
         init {
             loadLibrary()
         }
+
+        /**
+         * Create Actor with Singapore-specific configuration
+         *
+         * @param tileDir Path to Singapore tiles (default: data/valhalla_tiles/singapore)
+         * @return Actor instance configured for Singapore
+         */
+        @JvmStatic
+        fun createSingapore(tileDir: String = "data/valhalla_tiles/singapore"): Actor {
+            val config = global.tada.valhalla.config.SingaporeConfig.buildConfig(tileDir)
+            return Actor(config)
+        }
+
+        /**
+         * Create Actor with region-specific configuration
+         *
+         * @param region Region to configure (Singapore, Thailand)
+         * @param regionsConfigFile Path to regions.json (default: config/regions/regions.json)
+         * @return Actor instance configured for the specified region
+         */
+        @JvmStatic
+        fun createForRegion(
+            region: global.tada.valhalla.config.RegionConfig.Region,
+            regionsConfigFile: String = "config/regions/regions.json"
+        ): Actor {
+            val config = global.tada.valhalla.config.RegionConfig.loadRegionConfig(region, regionsConfigFile)
+            return Actor(config)
+        }
+
+        /**
+         * Create Actor from configuration file
+         *
+         * @param configFile Path to Valhalla configuration JSON file
+         * @return Actor instance
+         */
+        @JvmStatic
+        fun fromFile(configFile: String): Actor {
+            val config = File(configFile).readText()
+            return Actor(config)
+        }
     }
 
     /**
