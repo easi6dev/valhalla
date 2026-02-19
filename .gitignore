@@ -102,3 +102,14 @@ nul
 
 # Gradle caches
 src/bindings/java/gradle-8.5/
+/.idea/gradle.xml
+/gradle/wrapper/gradle-wrapper.jar
+/gradle/wrapper/gradle-wrapper.properties
+/gradlew
+/gradlew.bat
+/.idea/misc.xml
+/src/bindings/nodejs/package-lock.json
+/.claude/settings.local.json
+/.claude/status_line_command.ps1
+/.claude/status_line_command.sh
+/.claude/STATUS_LINE_README.md
