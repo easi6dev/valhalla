@@ -72,14 +72,56 @@ class Actor(config: String) : AutoCloseable {
                             }
 
                             // copy the library files outside of jar
-                            val libraryFiles = this::class.java.classLoader.let {
+                            // Load in dependency order: deepest dependencies first
+                            val libraryFiles = this::class.java.classLoader.let { classLoader ->
                                 listOfNotNull(
-                                    it.getResource("lib/${os.identifier}-${arch}/abseil_dll${os.suffix}"),
-                                    it.getResource("lib/${os.identifier}-${arch}/libcurl${os.suffix}"),
-                                    it.getResource("lib/${os.identifier}-${arch}/libprotobuf-lite${os.suffix}"),
-                                    it.getResource("lib/${os.identifier}-${arch}/lz4${os.suffix}"),
-                                    it.getResource("lib/${os.identifier}-${arch}/zlib1${os.suffix}"),
-                                    it.getResource("lib/${os.identifier}-${arch}/valhalla_jni${os.suffix}"), // this should be the last entry!
+                                    // Layer 1: Base system libraries (no dependencies on our libs)
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libffi${os.suffix}.8"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libresolv${os.suffix}.2"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libkeyutils${os.suffix}.1"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libtasn1${os.suffix}.6"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libcom_err${os.suffix}.2"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libz${os.suffix}.1"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/liblz4${os.suffix}.1"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libgmp${os.suffix}.10"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libunistring${os.suffix}.2"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libbrotlicommon${os.suffix}.1"),
+
+                                    // Layer 2: Mid-level libraries (depend on Layer 1)
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libnettle${os.suffix}.8"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libhogweed${os.suffix}.6"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libp11-kit${os.suffix}.0"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libkrb5support${os.suffix}.0"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libk5crypto${os.suffix}.3"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libbrotlidec${os.suffix}.1"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libzstd${os.suffix}.1"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libidn2${os.suffix}.0"),
+
+                                    // Layer 3: Crypto and authentication libraries
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libgnutls${os.suffix}.30"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libkrb5${os.suffix}.3"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libcrypto${os.suffix}.3"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libssl${os.suffix}.3"),
+
+                                    // Layer 4: Protocol libraries (depend on crypto)
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libsasl2${os.suffix}.2"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libgssapi_krb5${os.suffix}.2"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/liblber-2.5${os.suffix}.0"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libldap-2.5${os.suffix}.0"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libnghttp2${os.suffix}.14"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libpsl${os.suffix}.5"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libssh${os.suffix}.4"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/librtmp${os.suffix}.1"),
+
+                                    // Layer 5: High-level protocol libraries
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libprotobuf-lite${os.suffix}.23"),
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libcurl${os.suffix}.4"),
+
+                                    // Layer 6: Valhalla library (depends on protobuf, curl, etc.)
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/libvalhalla${os.suffix}.3"),
+
+                                    // Layer 7: JNI wrapper (depends on libvalhalla, MUST be last!)
+                                    classLoader.getResource("lib/${os.identifier}-${arch}/lib${LIBRARY_NAME}${os.suffix}"),
                                 )
                             }
 
@@ -139,6 +181,37 @@ class Actor(config: String) : AutoCloseable {
         @JvmStatic
         fun createSingapore(tileDir: String = "data/valhalla_tiles/singapore"): Actor {
             val config = global.tada.valhalla.config.SingaporeConfig.buildConfig(tileDir)
+            return Actor(config)
+        }
+
+        /**
+         * Create Actor with external tile directory
+         *
+         * Automatically detects tile location from:
+         * 1. Environment variable: VALHALLA_TILES_DIR
+         * 2. System property: valhalla.tiles.dir
+         * 3. Default locations
+         *
+         * @param region Region subdirectory (optional, e.g., "singapore")
+         * @return Actor instance
+         */
+        @JvmStatic
+        fun createWithExternalTiles(region: String? = null): Actor {
+            val tileDir = global.tada.valhalla.config.TileConfig.autoDetect(region)
+            val config = global.tada.valhalla.config.createConfigWithTileDir(tileDir, region ?: "singapore")
+            return Actor(config)
+        }
+
+        /**
+         * Create Actor with custom tile directory path
+         *
+         * @param tileDir Absolute path to tile directory
+         * @param region Region name for config optimization (default: "singapore")
+         * @return Actor instance
+         */
+        @JvmStatic
+        fun createWithTilePath(tileDir: String, region: String = "singapore"): Actor {
+            val config = global.tada.valhalla.config.createConfigWithTileDir(tileDir, region)
             return Actor(config)
         }
 
