@@ -20,10 +20,10 @@ NC='\033[0m' # No Color
 
 # Script directory and project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Configuration paths
-REGIONS_CONFIG="${PROJECT_ROOT}/config/regions/singapore/regions.json"
+REGIONS_CONFIG="${PROJECT_ROOT}/config/regions/regions.json"
 DATA_DIR="${PROJECT_ROOT}/data/osm"
 
 # Helper functions
@@ -194,7 +194,7 @@ download_osm() {
     # Show next steps
     print_info "Next step: Build Valhalla tiles"
     echo "  cd ${PROJECT_ROOT}"
-    echo "  ./scripts/singapore/build-tiles.sh ${region}"
+    echo "  ./scripts/regions/build-tiles.sh ${region}"
 }
 
 # Show usage

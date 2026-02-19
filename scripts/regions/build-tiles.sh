@@ -20,10 +20,10 @@ NC='\033[0m'
 
 # Script paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Configuration
-REGIONS_CONFIG="${PROJECT_ROOT}/config/regions/singapore/regions.json"
+REGIONS_CONFIG="${PROJECT_ROOT}/config/regions/regions.json"
 CONFIG_TEMPLATE="${PROJECT_ROOT}/config/regions/singapore/valhalla-singapore.json"
 LOG_DIR="${PROJECT_ROOT}/logs"
 
@@ -139,7 +139,7 @@ build_tiles() {
         print_error "OSM file not found: ${OSM_FILE}"
         echo ""
         echo "Please download OSM data first:"
-        echo "  ./scripts/singapore/download-region-osm.sh ${region}"
+        echo "  ./scripts/regions/download-region-osm.sh ${region}"
         exit 1
     fi
 
@@ -364,7 +364,7 @@ build_tiles() {
         echo ""
         print_info "Next steps:"
         echo "  1. Test the tiles:"
-        echo "     ./scripts/singapore/validate-tiles.sh ${region}"
+        echo "     ./scripts/regions/validate-tiles.sh ${region}"
         echo ""
         echo "  2. Run JNI tests:"
         echo "     cd src/bindings/java"

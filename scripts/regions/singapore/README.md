@@ -1,8 +1,12 @@
-# Singapore Setup Scripts
+# Singapore Region Documentation
 
-Collection of automated scripts for setting up Valhalla with Singapore region support.
+Documentation for setting up Valhalla with Singapore region support.
+
+**Note:** The generic setup scripts have been moved to `scripts/regions/` for multi-region support.
 
 ## Scripts Overview
+
+All scripts are now located in `scripts/regions/`:
 
 ### 1. `setup-valhalla.sh` - Automated Setup ⭐
 
@@ -10,6 +14,7 @@ Collection of automated scripts for setting up Valhalla with Singapore region su
 
 ```bash
 # Full automated setup
+cd scripts/regions
 ./setup-valhalla.sh
 
 # The script will:
@@ -24,6 +29,7 @@ Collection of automated scripts for setting up Valhalla with Singapore region su
 
 **Options:**
 ```bash
+cd scripts/regions
 ./setup-valhalla.sh --help           # Show help
 ./setup-valhalla.sh --method python  # Force Python method
 ./setup-valhalla.sh --method docker  # Force Docker method
@@ -40,9 +46,10 @@ Collection of automated scripts for setting up Valhalla with Singapore region su
 
 ### 2. `download-region-osm.sh` - OSM Data Downloader
 
-Downloads OpenStreetMap data for any region defined in `config/regions/singapore/regions.json`.
+Downloads OpenStreetMap data for any region defined in `config/regions/regions.json`.
 
 ```bash
+cd scripts/regions
 # Download Singapore data
 ./download-region-osm.sh singapore
 
@@ -51,7 +58,7 @@ Downloads OpenStreetMap data for any region defined in `config/regions/singapore
 ```
 
 **What it does:**
-- Reads region config from `config/regions/singapore/regions.json`
+- Reads region config from `config/regions/regions.json`
 - Downloads OSM data from Geofabrik
 - Saves to `data/osm/{region}-latest.osm.pbf`
 - Verifies MD5 checksum
@@ -69,6 +76,7 @@ Downloads OpenStreetMap data for any region defined in `config/regions/singapore
 Builds Valhalla routing tiles from OSM data.
 
 ```bash
+cd scripts/regions
 # Build Singapore tiles
 ./build-tiles.sh singapore
 
@@ -99,6 +107,7 @@ Builds Valhalla routing tiles from OSM data.
 Validates that tiles were built correctly.
 
 ```bash
+cd scripts/regions
 # Validate Singapore tiles
 ./validate-tiles.sh singapore
 ```
@@ -126,6 +135,7 @@ Validates that tiles were built correctly.
 
 ```bash
 # Run the automated setup script
+cd scripts/regions
 ./setup-valhalla.sh
 
 # That's it! Everything is done automatically.
@@ -138,6 +148,7 @@ Validates that tiles were built correctly.
 pip install pyvalhalla
 
 # Step 2: Download OSM data
+cd scripts/regions
 ./download-region-osm.sh singapore
 
 # Step 3: Build tiles
@@ -154,6 +165,7 @@ cd ../../src/bindings/java
 ### Example 3: Update OSM Data
 
 ```bash
+cd scripts/regions
 # Download latest OSM data
 ./download-region-osm.sh singapore
 
@@ -167,6 +179,7 @@ cd ../../src/bindings/java
 ### Example 4: Setup Multiple Regions
 
 ```bash
+cd scripts/regions
 # Setup Singapore
 ./setup-valhalla.sh --region singapore
 
@@ -177,6 +190,7 @@ cd ../../src/bindings/java
 ### Example 5: Use Docker Method
 
 ```bash
+cd scripts/regions
 # Force Docker installation
 ./setup-valhalla.sh --method docker
 ```
@@ -184,6 +198,7 @@ cd ../../src/bindings/java
 ### Example 6: Only Download and Build (Tools Already Installed)
 
 ```bash
+cd scripts/regions
 # Skip installation step
 ./setup-valhalla.sh --skip-install --skip-test
 ```
@@ -247,17 +262,18 @@ docker run -v $(pwd):/data ghcr.io/valhalla/valhalla:latest valhalla_build_tiles
 Scripts read configuration from:
 
 ```
-config/regions/singapore/
-├── regions.json                 # Region definitions
-├── valhalla-singapore.json      # Valhalla config
-└── profiles/
-    ├── auto_singapore.json      # Car routing profile
-    └── motorcycle_singapore.json # Motorcycle profile
+config/regions/
+├── regions.json                 # Region definitions (multi-region)
+└── singapore/
+    ├── valhalla-singapore.json  # Valhalla config
+    └── profiles/
+        ├── auto_singapore.json      # Car routing profile
+        └── motorcycle_singapore.json # Motorcycle profile
 ```
 
 ### Adding a New Region
 
-1. Edit `config/regions/singapore/regions.json`:
+1. Edit `config/regions/regions.json`:
 
 ```json
 {
@@ -281,6 +297,7 @@ config/regions/singapore/
 2. Run setup:
 
 ```bash
+cd scripts/regions
 ./setup-valhalla.sh --region malaysia
 ```
 
@@ -311,6 +328,7 @@ Install Docker:
 
 Check logs:
 ```bash
+cd scripts/regions
 ./build-tiles.sh singapore 2>&1 | tee build.log
 ```
 
@@ -322,11 +340,12 @@ Common causes:
 ### Tests Fail
 
 ```bash
+cd scripts/regions
 # Validate tiles first
 ./validate-tiles.sh singapore
 
 # Check tile directory
-ls -la data/valhalla_tiles/singapore/
+ls -la ../../data/valhalla_tiles/singapore/
 
 # Rebuild if needed
 ./build-tiles.sh singapore

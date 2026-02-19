@@ -19,8 +19,8 @@ NC='\033[0m'
 
 # Script paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-REGIONS_CONFIG="${PROJECT_ROOT}/config/regions/singapore/regions.json"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REGIONS_CONFIG="${PROJECT_ROOT}/config/regions/regions.json"
 
 # Helper functions
 print_header() {
@@ -95,7 +95,7 @@ validate_tiles() {
     else
         print_error "No tile files (.gph) found"
         echo "  Please build tiles first:"
-        echo "  ./scripts/singapore/build-tiles.sh ${region}"
+        echo "  ./scripts/regions/build-tiles.sh ${region}"
         exit 1
     fi
 
