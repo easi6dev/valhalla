@@ -15,7 +15,7 @@ Quick guide to get started with Valhalla JNI bindings for Singapore ride-hailing
 
 ```bash
 cd valhalla
-./scripts/regions/singapore/download-region-osm.sh singapore
+./scripts/regions/download-region-osm.sh singapore
 ```
 
 **Expected output:**
@@ -28,7 +28,7 @@ Size: ~230 MB
 ### Step 2: Build Tiles (10-20 minutes)
 
 ```bash
-./scripts/regions/singapore/build-tiles.sh singapore
+./scripts/regions/build-tiles.sh singapore
 ```
 
 **Expected output:**
@@ -232,8 +232,8 @@ Error: Singapore tiles not found!
 
 **Solution:**
 ```bash
-./scripts/regions/singapore/download-region-osm.sh singapore
-./scripts/regions/singapore/build-tiles.sh singapore
+./scripts/regions/download-region-osm.sh singapore
+./scripts/regions/build-tiles.sh singapore
 ```
 
 ### Library Load Error
