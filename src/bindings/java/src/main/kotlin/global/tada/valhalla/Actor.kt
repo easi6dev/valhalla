@@ -173,15 +173,61 @@ class Actor(config: String) : AutoCloseable {
         }
 
         /**
+         * Create Actor with region-specific configuration
+         *
+         * This is the recommended way to create an Actor instance for any supported region.
+         *
+         * ## Supported Regions
+         * - singapore (or "sg")
+         * - thailand (or "th")
+         *
+         * ## Usage Example
+         * ```kotlin
+         * // Create Actor for Singapore
+         * val sgActor = Actor.createForRegion("singapore")
+         *
+         * // Create Actor for Thailand with custom tile directory
+         * val thActor = Actor.createForRegion("thailand", "/custom/path/to/tiles")
+         *
+         * // Use country code
+         * val actor = Actor.createForRegion("th", "/path/to/tiles")
+         * ```
+         *
+         * @param region Region name (case-insensitive: "singapore", "thailand", etc.)
+         * @param tileDir Path to tiles directory (default: "data/valhalla_tiles/{region}")
+         * @param enableTraffic Enable traffic-aware routing (default: false)
+         * @return Actor instance configured for the specified region
+         * @throws IllegalArgumentException if region is not supported
+         */
+        @JvmStatic
+        @JvmOverloads
+        fun createForRegion(
+            region: String,
+            tileDir: String = "data/valhalla_tiles/${region.lowercase()}",
+            enableTraffic: Boolean = false
+        ): Actor {
+            val config = global.tada.valhalla.config.RegionConfigFactory.buildConfig(
+                region = region,
+                tileDir = tileDir,
+                enableTraffic = enableTraffic
+            )
+            return Actor(config)
+        }
+
+        /**
          * Create Actor with Singapore-specific configuration
          *
          * @param tileDir Path to Singapore tiles (default: data/valhalla_tiles/singapore)
          * @return Actor instance configured for Singapore
+         * @deprecated Use createForRegion("singapore", tileDir) instead
          */
+        @Deprecated(
+            message = "Use createForRegion(\"singapore\", tileDir) instead for better multi-region support",
+            replaceWith = ReplaceWith("createForRegion(\"singapore\", tileDir)")
+        )
         @JvmStatic
         fun createSingapore(tileDir: String = "data/valhalla_tiles/singapore"): Actor {
-            val config = global.tada.valhalla.config.SingaporeConfig.buildConfig(tileDir)
-            return Actor(config)
+            return createForRegion("singapore", tileDir)
         }
 
         /**
