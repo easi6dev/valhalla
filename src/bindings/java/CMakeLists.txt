@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 
 project(valhalla-jni)
 
+# Set C++ standard to C++20 (required for Valhalla)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 # Determine if we're being built as part of the main Valhalla project or standalone
 if(NOT DEFINED VALHALLA_SOURCE_DIR)
     # Standalone build - set VALHALLA_SOURCE_DIR to parent directory
@@ -44,13 +49,33 @@ target_include_directories(valhalla_jni PRIVATE
     ${VALHALLA_SOURCE_DIR}           # For valhalla/baldr/*, valhalla/midgard/*, etc.
     ${VALHALLA_SOURCE_DIR}/src       # For config.h and other src headers
     ${VALHALLA_SOURCE_DIR}/third_party/rapidjson/include
+    ${VALHALLA_SOURCE_DIR}/valhalla  # Direct access to valhalla headers
+    ${VALHALLA_SOURCE_DIR}/build/src # For generated protobuf headers
 )
 
 # Link libraries
-target_link_libraries(valhalla_jni PRIVATE
-    valhalla
-    $<$<BOOL:${ENABLE_COVERAGE}>:gcov>
-)
+# Check if valhalla target exists (building as part of main project)
+if(TARGET valhalla)
+    target_link_libraries(valhalla_jni PRIVATE
+        valhalla
+        $<$<BOOL:${ENABLE_COVERAGE}>:gcov>
+    )
+else()
+    # Standalone build - link against pre-built library
+    set(VALHALLA_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/main/resources/lib/linux-amd64")
+    find_library(VALHALLA_LIBRARY
+        NAMES valhalla
+        PATHS ${VALHALLA_LIB_DIR}
+        NO_DEFAULT_PATH
+    )
+
+    if(VALHALLA_LIBRARY)
+        message(STATUS "Found pre-built Valhalla library: ${VALHALLA_LIBRARY}")
+        target_link_libraries(valhalla_jni PRIVATE ${VALHALLA_LIBRARY})
+    else()
+        message(FATAL_ERROR "Valhalla library not found in ${VALHALLA_LIB_DIR}")
+    endif()
+endif()
 
 # Platform-specific settings
 if(APPLE)
