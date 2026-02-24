@@ -58,7 +58,7 @@ SKIP_ELEVATION=false
 
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # ============================================================================
 # Helper Functions
@@ -367,7 +367,7 @@ build_tiles() {
     if [ "$SKIP_ELEVATION" = false ]; then
         echo ""
         print_info "Elevation data provides hill/slope information for routes"
-        print_info "For Singapore (mostly flat terrain), elevation is optional"
+        print_info "For regions with flat terrain, elevation is optional"
         echo ""
         print_warning "Note: Elevation processing can take 30-60+ minutes due to data downloads"
         print_info "Recommended: Skip elevation for faster builds (~15-20 min vs 60+ min)"
@@ -433,14 +433,18 @@ run_tests() {
 
     cd "$java_dir"
 
-    print_info "Running: ./gradlew test --tests \"SingaporeRideHaulingTest\""
+    # Capitalize region name for test class
+    local region_capitalized="$(echo ${REGION:0:1} | tr '[:lower:]' '[:upper:]')${REGION:1}"
+    local test_class="global.tada.valhalla.${REGION}.${region_capitalized}RideHaulingTest"
+
+    print_info "Running: ./gradlew test --tests \"${test_class}\""
     echo ""
 
     if [ "$(uname -s)" = "Linux" ] || [ "$(uname -s)" = "Darwin" ]; then
-        ./gradlew test --tests "SingaporeRideHaulingTest"
+        ./gradlew test --tests "${test_class}"
     else
         # Windows with Git Bash
-        ./gradlew.bat test --tests "SingaporeRideHaulingTest" || ./gradlew test --tests "SingaporeRideHaulingTest"
+        ./gradlew.bat test --tests "${test_class}" || ./gradlew test --tests "${test_class}"
     fi
 
     local exit_code=$?
@@ -591,19 +595,23 @@ main() {
     # Final summary
     print_header "Setup Complete! 🎉"
 
-    print_success "Valhalla is ready to use"
+    # Capitalize region name for display
+    local region_capitalized="$(echo ${REGION:0:1} | tr '[:lower:]' '[:upper:]')${REGION:1}"
+
+    print_success "Valhalla is ready to use for ${region_capitalized}"
     echo ""
     print_info "Quick start with JNI:"
     echo ""
     echo "  import global.tada.valhalla.Actor"
     echo ""
-    echo "  val actor = Actor.createSingapore()"
+    echo "  val actor = Actor.createForRegion(\"${REGION}\")"
     echo "  val result = actor.route(requestJson)"
     echo "  actor.close()"
     echo ""
     print_info "For more information, see:"
-    print_info "  - docs/singapore/SINGAPORE_QUICKSTART.md"
-    print_info "  - docs/singapore/SETUP_GUIDE.md"
+    print_info "  - docs/MULTI_REGION_USAGE.md"
+    print_info "  - docs/regions/${REGION}/ (if available)"
+    print_info "  - config/regions/${REGION}/"
     echo ""
 }
 

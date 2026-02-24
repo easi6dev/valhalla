@@ -1,0 +1,35 @@
+plugins {
+    kotlin("jvm") version "1.9.25"
+    application
+}
+
+group = "examples"
+version = "1.0.0"
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+dependencies {
+    // Valhalla JNI bindings from local Maven
+    implementation("global.tada.valhalla:valhalla-jni:1.0.0-SNAPSHOT")
+
+    // Kotlin standard library
+    implementation(kotlin("stdlib"))
+}
+
+application {
+    mainClass.set("examples.SimpleRoutingExampleKt")
+}
+
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}

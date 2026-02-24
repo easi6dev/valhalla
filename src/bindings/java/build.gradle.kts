@@ -66,7 +66,8 @@ tasks.register<Exec>("buildNative") {
     workingDir = projectDir
 
     onlyIf {
-        file("${project.buildDir}/libs/native/Release").listFiles().isEmpty()
+        val nativeDir = file("${project.buildDir}/libs/native/Release")
+        !nativeDir.exists() || nativeDir.listFiles()?.isEmpty() == true
     }
 
     // Windows에서는 cmd를 통해 실행

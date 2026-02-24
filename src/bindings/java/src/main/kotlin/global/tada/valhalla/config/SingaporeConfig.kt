@@ -1,6 +1,7 @@
 package global.tada.valhalla.config
 
 import java.io.File
+import kotlin.math.cos
 
 /**
  * Singapore-specific configuration helper for Valhalla Actor
@@ -9,6 +10,43 @@ import java.io.File
  * For detailed parameter descriptions, see: docs/singapore/CONFIGURATION_REFERENCE.md
  */
 object SingaporeConfig {
+
+    val regionName = "Singapore"
+    val timezone = "Asia/Singapore"
+    val locale = "en-SG"
+    val currency = "SGD"
+
+    /**
+     * Singapore geographic bounds
+     */
+    data class BoundsData(
+        val minLat: Double,
+        val maxLat: Double,
+        val minLon: Double,
+        val maxLon: Double
+    ) {
+        fun isValidLocation(lat: Double, lon: Double): Boolean {
+            return lat in minLat..maxLat && lon in minLon..maxLon
+        }
+
+        fun center(): Pair<Double, Double> {
+            return Pair((minLat + maxLat) / 2, (minLon + maxLon) / 2)
+        }
+
+        fun approximateArea(): Double {
+            // Rough calculation in km²
+            val latDiff = maxLat - minLat
+            val lonDiff = maxLon - minLon
+            return latDiff * lonDiff * 111.0 * 111.0 * cos(Math.toRadians((minLat + maxLat) / 2))
+        }
+    }
+
+    val bounds = BoundsData(
+        minLat = 1.15,
+        maxLat = 1.48,
+        minLon = 103.6,
+        maxLon = 104.0
+    )
 
     /**
      * Create a Singapore-optimized configuration
@@ -20,8 +58,8 @@ object SingaporeConfig {
      * @return JSON configuration string
      */
     fun buildConfig(
-        tileDir: String = "data/valhalla_tiles/singapore",
-        enableTraffic: Boolean = false
+        tileDir: String,
+        enableTraffic: Boolean
     ): String {
         val resolvedTileDir = File(tileDir).canonicalPath.replace("\\", "/")
 
@@ -159,29 +197,9 @@ object SingaporeConfig {
     }
 
     /**
-     * Singapore region bounds for validation
+     * Auto costing with ERP and CBD awareness
      */
-    object Bounds {
-        const val MIN_LAT = 1.15
-        const val MAX_LAT = 1.48
-        const val MIN_LON = 103.6
-        const val MAX_LON = 104.0
-
-        fun isValidLocation(lat: Double, lon: Double): Boolean {
-            return lat in MIN_LAT..MAX_LAT && lon in MIN_LON..MAX_LON
-        }
-    }
-
-    /**
-     * Singapore-specific costing options
-     *
-     * For detailed parameter descriptions, see: docs/singapore/CONFIGURATION_REFERENCE.md
-     */
-    object Costing {
-        /**
-         * Auto costing with ERP and CBD awareness
-         */
-        fun autoProfile() = """
+    fun autoProfile() = """
         {
           "costing": "auto",
           "costing_options": {
@@ -199,10 +217,10 @@ object SingaporeConfig {
         }
         """.trimIndent()
 
-        /**
-         * Motorcycle costing with lane restrictions
-         */
-        fun motorcycleProfile() = """
+    /**
+     * Motorcycle costing with lane restrictions
+     */
+    fun motorcycleProfile() = """
         {
           "costing": "motorcycle",
           "costing_options": {
@@ -216,33 +234,68 @@ object SingaporeConfig {
         }
         """.trimIndent()
 
-        /**
-         * Taxi costing (similar to auto with optimizations)
-         */
-        fun taxiProfile() = """
+    /**
+     * Taxi costing with taxi-specific optimizations
+     * Optimized for: Ride-hailing, taxi services, frequent stops
+     */
+    fun taxiProfile() = """
         {
-          "costing": "auto",
+          "costing": "taxi",
           "costing_options": {
-            "auto": {
+            "taxi": {
               "maneuver_penalty": 5,
+              "gate_cost": 30,
+              "toll_booth_cost": 15,
               "use_highways": 1.0,
               "use_tolls": 1.0,
               "top_speed": 90,
+              "closure_factor": 9.0,
               "shortest": false
             }
           }
         }
         """.trimIndent()
-    }
 
     /**
      * Utility to load configuration from file
+     *
+     * @deprecated Use buildConfig() instead for programmatic configuration
      */
+    @Deprecated("Use buildConfig() instead", ReplaceWith("buildConfig(tileDir)"))
     fun loadFromFile(configFile: String = "config/singapore/valhalla-singapore.json"): String {
         val file = File(configFile)
         if (!file.exists()) {
             throw IllegalArgumentException("Config file not found: $configFile")
         }
         return file.readText()
+    }
+
+    /**
+     * Legacy Bounds object for backward compatibility
+     *
+     * @deprecated Use bounds property instead
+     */
+    @Deprecated("Use SingaporeConfig.bounds instead", ReplaceWith("SingaporeConfig.bounds"))
+    object Bounds {
+        const val MIN_LAT = 1.15
+        const val MAX_LAT = 1.48
+        const val MIN_LON = 103.6
+        const val MAX_LON = 104.0
+
+        fun isValidLocation(lat: Double, lon: Double): Boolean {
+            return lat in MIN_LAT..MAX_LAT && lon in MIN_LON..MAX_LON
+        }
+    }
+
+    /**
+     * Legacy Costing object for backward compatibility
+     *
+     * @deprecated Use direct methods on SingaporeConfig instead
+     */
+    @Deprecated("Use SingaporeConfig.autoProfile() instead", ReplaceWith("SingaporeConfig.autoProfile()"))
+    object Costing {
+        fun autoProfile() = SingaporeConfig.autoProfile()
+        fun motorcycleProfile() = SingaporeConfig.motorcycleProfile()
+        fun taxiProfile() = SingaporeConfig.taxiProfile()
     }
 }

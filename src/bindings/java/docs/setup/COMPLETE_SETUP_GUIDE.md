@@ -172,7 +172,7 @@ The automated setup script handles everything:
 cd valhalla
 
 # Run automated setup
-./scripts/regions/singapore/setup-valhalla.sh
+./scripts/regions/setup-valhalla.sh
 ```
 
 **What it does:**
@@ -190,19 +190,19 @@ cd valhalla
 
 ```bash
 # Force specific installation method
-./scripts/regions/singapore/setup-valhalla.sh --method python
-./scripts/regions/singapore/setup-valhalla.sh --method docker
+./scripts/regions/setup-valhalla.sh --method python
+./scripts/regions/setup-valhalla.sh --method docker
 
 # Skip specific steps
-./scripts/regions/singapore/setup-valhalla.sh --skip-install    # Tools already installed
-./scripts/regions/singapore/setup-valhalla.sh --skip-download   # OSM data exists
-./scripts/regions/singapore/setup-valhalla.sh --skip-build      # Tiles already built
+./scripts/regions/setup-valhalla.sh --skip-install    # Tools already installed
+./scripts/regions/setup-valhalla.sh --skip-download   # OSM data exists
+./scripts/regions/setup-valhalla.sh --skip-build      # Tiles already built
 
 # Setup different region
-./scripts/regions/singapore/setup-valhalla.sh --region thailand
+./scripts/regions/setup-valhalla.sh --region thailand
 
 # Show all options
-./scripts/regions/singapore/setup-valhalla.sh --help
+./scripts/regions/setup-valhalla.sh --help
 ```
 
 ---
@@ -762,13 +762,13 @@ data/valhalla_tiles/singapore/
 
 ```bash
 # Download OSM data
-./scripts/regions/singapore/download-region-osm.sh singapore
+./scripts/regions/download-region-osm.sh singapore
 
 # Build tiles
-./scripts/regions/singapore/build-tiles.sh singapore
+./scripts/regions/build-tiles.sh singapore
 
 # Validate tiles
-./scripts/regions/singapore/validate-tiles.sh singapore
+./scripts/regions/validate-tiles.sh singapore
 ```
 
 ### Manual Build Process
@@ -776,7 +776,7 @@ data/valhalla_tiles/singapore/
 #### Step 1: Download OSM Data
 
 ```bash
-./scripts/regions/singapore/download-region-osm.sh singapore
+./scripts/regions/download-region-osm.sh singapore
 ```
 
 **What happens:**
@@ -788,7 +788,7 @@ data/valhalla_tiles/singapore/
 #### Step 2: Build Tiles
 
 ```bash
-./scripts/regions/singapore/build-tiles.sh singapore
+./scripts/regions/build-tiles.sh singapore
 ```
 
 **What happens:**
@@ -808,7 +808,7 @@ Total size: 450 MB
 #### Step 3: Validate Tiles
 
 ```bash
-./scripts/regions/singapore/validate-tiles.sh singapore
+./scripts/regions/validate-tiles.sh singapore
 ```
 
 **Validation checks:**
@@ -840,10 +840,10 @@ To update tiles with new OSM data:
 
 ```bash
 # 1. Download latest OSM data
-./scripts/regions/singapore/download-region-osm.sh singapore
+./scripts/regions/download-region-osm.sh singapore
 
 # 2. Rebuild tiles (overwrites existing)
-./scripts/regions/singapore/build-tiles.sh singapore
+./scripts/regions/build-tiles.sh singapore
 
 # 3. Restart your application to load new tiles
 ```
@@ -968,7 +968,7 @@ Error: Singapore tiles not found!
 ```bash
 ls -la data/valhalla_tiles/singapore/
 # If empty, rebuild tiles
-./scripts/regions/singapore/build-tiles.sh singapore
+./scripts/regions/build-tiles.sh singapore
 ```
 
 #### Issue 6: OSM Download Fails
@@ -1000,7 +1000,7 @@ Error: valhalla_build_tiles failed
 
 **Check logs:**
 ```bash
-./scripts/regions/singapore/build-tiles.sh singapore 2>&1 | tee build.log
+./scripts/regions/build-tiles.sh singapore 2>&1 | tee build.log
 ```
 
 **Common causes:**
@@ -1021,7 +1021,7 @@ sudo swapon /swapfile
 b) Re-download OSM data:
 ```bash
 rm data/osm/singapore-latest.osm.pbf
-./scripts/regions/singapore/download-region-osm.sh singapore
+./scripts/regions/download-region-osm.sh singapore
 ```
 
 ### Runtime Issues
@@ -1061,7 +1061,7 @@ a) **Coordinates outside Singapore:**
 
 b) **Tiles incomplete:**
 ```bash
-./scripts/regions/singapore/validate-tiles.sh singapore
+./scripts/regions/validate-tiles.sh singapore
 ```
 
 c) **Location on restricted road:**
