@@ -1,18 +1,17 @@
 #!/bin/bash
 
 ################################################################################
-# Valhalla JNI Bindings Build Script for WSL
+# Valhalla JNI Bindings Build Script for WSL/Linux
 #
 # This script builds the Valhalla JNI bindings (Java/Kotlin) in WSL Ubuntu.
 # It compiles the native C++ JNI wrapper and packages it with Gradle.
 #
 # Prerequisites:
-# - WSL Ubuntu 22.04
-# - This script should be run from WSL
+# - WSL Ubuntu 22.04 or Linux
+# - Run from project root directory
 #
 # Usage:
-#   wsl -d Ubuntu-22.04
-#   cd /mnt/c/Users/Vibin/Workspace/valhallaV3
+#   cd /path/to/valhallaV3
 #   chmod +x build-jni-bindings.sh
 #   ./build-jni-bindings.sh
 #
@@ -27,8 +26,19 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Auto-detect project root (directory containing this script)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+
+# Verify we're in the Valhalla project root
+if [ ! -f "$PROJECT_ROOT/CMakeLists.txt" ] || [ ! -d "$PROJECT_ROOT/src/bindings/java" ]; then
+    echo -e "${RED}ERROR: Not in Valhalla project root!${NC}"
+    echo -e "${RED}Expected to find: CMakeLists.txt and src/bindings/java/${NC}"
+    echo -e "${RED}Current directory: $PROJECT_ROOT${NC}"
+    exit 1
+fi
+
 # Project paths
-PROJECT_ROOT="/mnt/c/Users/Vibin/Workspace/valhallaV3"
 JAVA_BINDINGS_DIR="${PROJECT_ROOT}/src/bindings/java"
 NATIVE_LIB_DIR="${JAVA_BINDINGS_DIR}/src/main/resources/lib/linux-amd64"
 BUILD_DIR="${JAVA_BINDINGS_DIR}/build"

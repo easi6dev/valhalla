@@ -1,0 +1,106 @@
+# ============================================
+# Kubernetes Ingress for Valhalla JNI
+# ============================================
+# Exposes the service externally with TLS
+# Requires nginx-ingress-controller or similar
+# ============================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: valhalla-jni-ingress
+  namespace: valhalla
+  labels:
+    app: valhalla-jni
+  annotations:
+    # Ingress class
+    kubernetes.io/ingress.class: nginx
+
+    # SSL/TLS
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod  # If using cert-manager
+
+    # Rate limiting
+    nginx.ingress.kubernetes.io/rate-limit: "1000"  # 1000 req/s per IP
+
+    # Connection limits
+    nginx.ingress.kubernetes.io/limit-connections: "100"
+
+    # Timeouts
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+
+    # CORS (if needed)
+    # nginx.ingress.kubernetes.io/enable-cors: "true"
+    # nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    # nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, OPTIONS"
+
+    # Custom headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+
+spec:
+  tls:
+    - hosts:
+        - routing.example.com
+      secretName: valhalla-tls  # TLS certificate secret
+
+  rules:
+    - host: routing.example.com
+      http:
+        paths:
+          # Route API
+          - path: /route
+            pathType: Prefix
+            backend:
+              service:
+                name: valhalla-jni
+                port:
+                  number: 80
+
+          # Health check
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: valhalla-jni
+                port:
+                  number: 80
+
+          # Metrics (restrict access in production!)
+          # - path: /metrics
+          #   pathType: Prefix
+          #   backend:
+          #     service:
+          #       name: valhalla-jni
+          #       port:
+          #         number: 80
+
+---
+# Alternative: AWS ALB Ingress (if using AWS)
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: valhalla-jni-alb
+#   namespace: valhalla
+#   annotations:
+#     kubernetes.io/ingress.class: alb
+#     alb.ingress.kubernetes.io/scheme: internet-facing
+#     alb.ingress.kubernetes.io/target-type: ip
+#     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+#     alb.ingress.kubernetes.io/ssl-redirect: '443'
+#     alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:region:account:certificate/id
+# spec:
+#   rules:
+#     - host: routing.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: valhalla-jni
+#                 port:
+#                   number: 80

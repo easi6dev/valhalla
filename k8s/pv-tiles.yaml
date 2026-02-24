@@ -1,0 +1,88 @@
+# ============================================
+# Kubernetes PersistentVolume for Tile Storage
+# ============================================
+# This example uses NFS for shared tile storage across pods
+# Adjust based on your infrastructure (EBS, S3, etc.)
+# ============================================
+
+# PersistentVolume (admin creates this)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: valhalla-tiles-pv
+  labels:
+    type: nfs
+    app: valhalla-jni
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadOnlyMany  # Multiple pods can read simultaneously
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs
+  mountOptions:
+    - hard
+    - nfsvers=4.1
+    - rsize=1048576
+    - wsize=1048576
+    - timeo=600
+    - retrans=2
+  nfs:
+    server: nfs-server.example.com  # Replace with your NFS server
+    path: /mnt/valhalla/tiles
+    readOnly: true
+
+---
+# PersistentVolumeClaim (application uses this)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: valhalla-tiles-pvc
+  namespace: valhalla
+  labels:
+    app: valhalla-jni
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 100Gi
+  selector:
+    matchLabels:
+      app: valhalla-jni
+
+---
+# Alternative: AWS EBS Volume (single AZ)
+# apiVersion: v1
+# kind: PersistentVolume
+# metadata:
+#   name: valhalla-tiles-pv-ebs
+# spec:
+#   capacity:
+#     storage: 100Gi
+#   accessModes:
+#     - ReadOnlyMany
+#   persistentVolumeReclaimPolicy: Retain
+#   storageClassName: ebs-sc
+#   awsElasticBlockStore:
+#     volumeID: vol-0123456789abcdef0  # Replace with your EBS volume ID
+#     fsType: ext4
+#     readOnly: true
+
+---
+# Alternative: AWS EFS (multi-AZ)
+# apiVersion: v1
+# kind: PersistentVolume
+# metadata:
+#   name: valhalla-tiles-pv-efs
+# spec:
+#   capacity:
+#     storage: 100Gi
+#   accessModes:
+#     - ReadOnlyMany
+#   persistentVolumeReclaimPolicy: Retain
+#   storageClassName: efs-sc
+#   csi:
+#     driver: efs.csi.aws.com
+#     volumeHandle: fs-0123456789abcdef  # Replace with your EFS filesystem ID

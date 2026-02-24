@@ -1,0 +1,73 @@
+# ============================================
+# EditorConfig for Valhalla JNI
+# ============================================
+# Consistent code style across editors and IDEs
+# Supports: IntelliJ IDEA, VS Code, etc.
+# ============================================
+
+root = true
+
+# ============================================
+# All Files
+# ============================================
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+# ============================================
+# Kotlin Files
+# ============================================
+[*.{kt,kts}]
+indent_size = 4
+max_line_length = 120
+ij_kotlin_allow_trailing_comma = true
+ij_kotlin_allow_trailing_comma_on_call_site = true
+
+# ============================================
+# Java Files
+# ============================================
+[*.java]
+indent_size = 4
+max_line_length = 120
+
+# ============================================
+# Gradle Files
+# ============================================
+[*.gradle,*.gradle.kts]
+indent_size = 4
+
+# ============================================
+# Configuration Files
+# ============================================
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.{json,toml}]
+indent_size = 2
+
+[*.xml]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+# ============================================
+# Shell Scripts
+# ============================================
+[*.{sh,bash}]
+indent_size = 2
+end_of_line = lf
+
+[*.{bat,cmd,ps1}]
+end_of_line = crlf
+
+# ============================================
+# C/C++ Files
+# ============================================
+[*.{c,cc,cpp,h,hpp}]
+indent_size = 2
+max_line_length = 100

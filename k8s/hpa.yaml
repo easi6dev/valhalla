@@ -1,0 +1,80 @@
+# ============================================
+# Kubernetes HorizontalPodAutoscaler
+# ============================================
+# Auto-scales pods based on CPU, memory, and custom metrics
+# ============================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: valhalla-jni-hpa
+  namespace: valhalla
+  labels:
+    app: valhalla-jni
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: valhalla-jni
+
+  minReplicas: 3
+  maxReplicas: 20
+
+  metrics:
+    # CPU-based scaling
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70  # Scale up when avg CPU > 70%
+
+    # Memory-based scaling
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80  # Scale up when avg memory > 80%
+
+    # Custom metric: HTTP requests per second (requires metrics-server)
+    # - type: Pods
+    #   pods:
+    #     metric:
+    #       name: http_requests_per_second
+    #     target:
+    #       type: AverageValue
+    #       averageValue: "500"  # Scale up when RPS > 500 per pod
+
+    # Custom metric: Route calculation latency (requires Prometheus adapter)
+    # - type: Pods
+    #   pods:
+    #     metric:
+    #       name: route_calculation_latency_p95
+    #     target:
+    #       type: AverageValue
+    #       averageValue: "1000m"  # Scale up when p95 latency > 1s
+
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60  # Wait 60s before scaling up again
+      policies:
+        # Scale up by 50% or 2 pods (whichever is higher)
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Max  # Use the policy that scales up more
+
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 minutes before scaling down
+      policies:
+        # Scale down by 25% or 1 pod (whichever is lower)
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+      selectPolicy: Min  # Use the policy that scales down less aggressively

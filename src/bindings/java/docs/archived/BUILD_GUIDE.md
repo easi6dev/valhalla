@@ -22,16 +22,16 @@ Complete guide for building Valhalla Java/Kotlin JNI bindings.
 ### One-Line Build (WSL)
 
 ```bash
-wsl -d Ubuntu-22.04 -e bash -c "cd /mnt/c/Users/Vibin/Workspace/valhallaV3/src/bindings/java && ./gradlew clean build"
+wsl -d Ubuntu-22.04 -e bash -c "cd /mnt/c/Users/Vibin/Workspace/valhalla/src/bindings/java && ./gradlew clean build"
 ```
 
 ### Using Automated Script
 
 ```bash
 wsl -d Ubuntu-22.04
-cd /mnt/c/Users/Vibin/Workspace/valhallaV3
-chmod +x build-jni-bindings.sh
-./build-jni-bindings.sh
+cd /mnt/c/Users/Vibin/Workspace/valhalla
+chmod +x src/bindings/java/build-jni-bindings.sh
+cd src/bindings/java && ./src/bindings/java/build-jni-bindings.sh
 ```
 
 ### Common Commands
@@ -236,7 +236,7 @@ Follow the same steps as Linux, but:
 wsl -d Ubuntu-22.04
 
 # Then follow Linux instructions
-cd /mnt/c/path/to/valhallaV3/src/bindings/java
+cd /mnt/c/path/to/valhalla/src/bindings/java
 ./gradlew clean build
 ```
 
@@ -255,22 +255,22 @@ gradlew.bat assemble -x buildNative
 
 ## Automated Build Script
 
-Use the provided `build-jni-bindings.sh` script for automated builds:
+Use the provided `src/bindings/java/build-jni-bindings.sh` script for automated builds:
 
 ### Basic Usage
 
 ```bash
 # Full build with all steps
-./build-jni-bindings.sh
+cd src/bindings/java && ./src/bindings/java/build-jni-bindings.sh
 
 # Skip dependency installation (if already installed)
-./build-jni-bindings.sh --skip-deps
+cd src/bindings/java && ./src/bindings/java/build-jni-bindings.sh --skip-deps
 
 # Skip native build (use existing libvalhalla_jni.so)
-./build-jni-bindings.sh --skip-native
+cd src/bindings/java && ./src/bindings/java/build-jni-bindings.sh --skip-native
 
 # Custom project path
-./build-jni-bindings.sh --project-root /custom/path
+cd src/bindings/java && ./src/bindings/java/build-jni-bindings.sh --project-root /custom/path
 ```
 
 ### Script Features

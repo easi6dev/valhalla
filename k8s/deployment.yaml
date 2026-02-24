@@ -1,0 +1,243 @@
+# ============================================
+# Kubernetes Deployment for Valhalla JNI
+# ============================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valhalla-jni
+  namespace: valhalla
+  labels:
+    app: valhalla-jni
+    version: v1
+    component: routing
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: valhalla-jni
+  template:
+    metadata:
+      labels:
+        app: valhalla-jni
+        version: v1
+        component: routing
+      annotations:
+        # Force pod restart when ConfigMap changes
+        checksum/config: "{{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}"
+    spec:
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      # Service account (if using RBAC)
+      # serviceAccountName: valhalla-jni-sa
+
+      # Node affinity (prefer nodes with SSD)
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: disk-type
+                    operator: In
+                    values:
+                      - ssd
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values:
+                      - c5.2xlarge
+                      - c5.4xlarge
+
+        # Pod anti-affinity (spread across nodes for HA)
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - valhalla-jni
+                topologyKey: kubernetes.io/hostname
+
+      # Init containers (optional: pre-check tiles)
+      # initContainers:
+      #   - name: check-tiles
+      #     image: busybox:1.35
+      #     command: ['sh', '-c', 'ls -lh /var/valhalla/tiles/ || exit 1']
+      #     volumeMounts:
+      #       - name: tiles
+      #         mountPath: /var/valhalla/tiles
+      #         readOnly: true
+
+      containers:
+        - name: valhalla-jni
+          image: your-registry.example.com/valhalla-jni:latest  # Replace with your registry
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          env:
+            # From ConfigMap
+            - name: VALHALLA_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: valhalla-config
+                  key: VALHALLA_ENV
+            - name: VALHALLA_TILES_DIR
+              valueFrom:
+                configMapKeyRef:
+                  name: valhalla-config
+                  key: VALHALLA_TILES_DIR
+            - name: JAVA_OPTS
+              valueFrom:
+                configMapKeyRef:
+                  name: valhalla-config
+                  key: JAVA_OPTS
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: valhalla-config
+                  key: LOG_LEVEL
+
+            # From Downward API (pod metadata)
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "2000m"
+              ephemeral-storage: "5Gi"
+            limits:
+              memory: "8Gi"
+              cpu: "4000m"
+              ephemeral-storage: "10Gi"
+
+          volumeMounts:
+            # Tile data (read-only)
+            - name: tiles
+              mountPath: /var/valhalla/tiles
+              readOnly: true
+
+            # Configuration files (read-only)
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+
+            # Logs (ephemeral)
+            - name: logs
+              mountPath: /var/log/valhalla
+
+            # Temp directory (ephemeral)
+            - name: tmp
+              mountPath: /tmp
+
+          # Liveness probe (restart if unhealthy)
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+
+          # Readiness probe (remove from service if not ready)
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+
+          # Startup probe (for slow starts, prevents liveness killing pod)
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 12  # 2 minutes max (10s * 12)
+
+          # Lifecycle hooks
+          lifecycle:
+            preStop:
+              exec:
+                # Graceful shutdown: wait for in-flight requests
+                command: ["/bin/sh", "-c", "sleep 15"]
+
+      volumes:
+        # Tile storage (PersistentVolumeClaim)
+        - name: tiles
+          persistentVolumeClaim:
+            claimName: valhalla-tiles-pvc
+
+        # Configuration (ConfigMap)
+        - name: config
+          configMap:
+            name: valhalla-regions-config
+
+        # Logs (ephemeral)
+        - name: logs
+          emptyDir:
+            sizeLimit: 5Gi
+
+        # Temp directory (ephemeral)
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi
+
+      # DNS config (optional: custom DNS)
+      # dnsPolicy: ClusterFirst
+      # dnsConfig:
+      #   options:
+      #     - name: ndots
+      #       value: "2"
+      #     - name: edns0
+
+      # Graceful shutdown period
+      terminationGracePeriodSeconds: 30
+
+      # Image pull secrets (if using private registry)
+      # imagePullSecrets:
+      #   - name: registry-credentials

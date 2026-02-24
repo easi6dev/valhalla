@@ -1,0 +1,91 @@
+# ============================================
+# Kubernetes ConfigMaps for Valhalla
+# ============================================
+
+# Environment configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valhalla-config
+  namespace: valhalla
+  labels:
+    app: valhalla-jni
+data:
+  VALHALLA_ENV: "prod"
+  VALHALLA_TILES_DIR: "/var/valhalla/tiles"
+  JAVA_OPTS: "-Xmx4g -Xms2g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/valhalla/heap-dump.hprof"
+  LOG_LEVEL: "INFO"
+
+---
+# Regions configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valhalla-regions-config
+  namespace: valhalla
+  labels:
+    app: valhalla-jni
+data:
+  regions-prod.json: |
+    {
+      "regions": {
+        "singapore": {
+          "name": "Singapore",
+          "enabled": true,
+          "osm_source": "https://download.geofabrik.de/asia/malaysia-singapore-brunei-latest.osm.pbf",
+          "bounds": {
+            "min_lat": 1.15,
+            "max_lat": 1.48,
+            "min_lon": 103.6,
+            "max_lon": 104.0
+          },
+          "tile_dir": "/var/valhalla/tiles/singapore",
+          "default_costing": "auto",
+          "supported_costings": ["auto", "taxi", "motorcycle"],
+          "costing_options": {
+            "auto": {
+              "maneuver_penalty": 5,
+              "country_crossing_penalty": 600,
+              "ferry_cost": 300,
+              "use_ferry": 0.5,
+              "shortest": false,
+              "speed_types": ["freeflow", "constrained", "predicted", "current"],
+              "top_speed": 90
+            },
+            "taxi": {
+              "maneuver_penalty": 5,
+              "use_highways": 1.0,
+              "use_tolls": 1.0,
+              "top_speed": 90
+            },
+            "motorcycle": {
+              "maneuver_penalty": 5,
+              "use_highways": 1.0,
+              "use_tolls": 1.0,
+              "top_speed": 90
+            }
+          },
+          "timezone": "Asia/Singapore",
+          "locale": "en-SG",
+          "currency": "SGD"
+        }
+      },
+      "metadata": {
+        "environment": "production",
+        "version": "1.0.0",
+        "last_updated": "2026-02-23",
+        "description": "Production environment configuration - optimized for performance and reliability",
+        "features": {
+          "debug_logging": false,
+          "strict_limits": true,
+          "production_regions_only": true,
+          "high_availability": true,
+          "monitoring_enabled": true
+        },
+        "deployment": {
+          "tile_update_schedule": "weekly",
+          "backup_enabled": true,
+          "failover_enabled": true
+        }
+      }
+    }

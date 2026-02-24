@@ -1,0 +1,11 @@
+# ============================================
+# Kubernetes Namespace for Valhalla
+# ============================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: valhalla
+  labels:
+    name: valhalla
+    environment: production
+    managed-by: kubectl

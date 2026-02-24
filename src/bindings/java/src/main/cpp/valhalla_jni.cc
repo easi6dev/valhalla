@@ -17,6 +17,46 @@ namespace vt = valhalla::tyr;
 namespace {
 
 /**
+ * RAII wrapper for JNI local references.
+ * Automatically deletes local reference when going out of scope.
+ *
+ * Use this for temporary jobject/jclass references that are not returned to Java.
+ *
+ * Example:
+ *   ScopedLocalRef<jclass> exClass(env, env->FindClass("java/lang/Exception"));
+ *   // Reference automatically deleted when exClass goes out of scope
+ */
+template<typename T>
+class ScopedLocalRef {
+private:
+    JNIEnv* env_;
+    T ref_;
+
+public:
+    ScopedLocalRef(JNIEnv* env, T ref) : env_(env), ref_(ref) {}
+
+    ~ScopedLocalRef() {
+        if (ref_ != nullptr) {
+            env_->DeleteLocalRef(ref_);
+        }
+    }
+
+    // Disable copy
+    ScopedLocalRef(const ScopedLocalRef&) = delete;
+    ScopedLocalRef& operator=(const ScopedLocalRef&) = delete;
+
+    // Allow move
+    ScopedLocalRef(ScopedLocalRef&& other) noexcept
+        : env_(other.env_), ref_(other.ref_) {
+        other.ref_ = nullptr;
+    }
+
+    T get() const { return ref_; }
+    operator T() const { return ref_; }
+    bool isNull() const { return ref_ == nullptr; }
+};
+
+/**
  * Configures Valhalla from a JSON configuration string.
  *
  * @param config JSON configuration string
@@ -53,21 +93,28 @@ const boost::property_tree::ptree configure(const std::string& config) {
  * @param env JNI environment
  * @param exception_class Exception class name
  * @param message Exception message
+ *
+ * Note: Uses RAII to ensure exception class reference is properly cleaned up.
  */
 void throwJavaException(JNIEnv* env, const char* exception_class, const char* message) {
-    jclass exClass = env->FindClass(exception_class);
-    if (exClass != nullptr) {
-        env->ThrowNew(exClass, message);
-        env->DeleteLocalRef(exClass);
+    ScopedLocalRef<jclass> exClass(env, env->FindClass(exception_class));
+    if (!exClass.isNull()) {
+        env->ThrowNew(exClass.get(), message);
+        // ScopedLocalRef will automatically delete the local reference
     }
 }
 
 /**
  * Converts a Java string to C++ std::string.
  *
+ * Memory Safety:
+ * - Properly releases GetStringUTFChars with ReleaseStringUTFChars
+ * - Returns empty string for null input (defensive programming)
+ * - Copies string data before releasing, preventing use-after-free
+ *
  * @param env JNI environment
- * @param jstr Java string
- * @return C++ string
+ * @param jstr Java string (can be null)
+ * @return C++ string (empty if input is null)
  */
 std::string jstring_to_string(JNIEnv* env, jstring jstr) {
     if (jstr == nullptr) {
@@ -76,9 +123,11 @@ std::string jstring_to_string(JNIEnv* env, jstring jstr) {
 
     const char* chars = env->GetStringUTFChars(jstr, nullptr);
     if (chars == nullptr) {
+        // Out of memory - return empty string
         return "";
     }
 
+    // Copy string before releasing
     std::string result(chars);
     env->ReleaseStringUTFChars(jstr, chars);
     return result;
@@ -87,9 +136,18 @@ std::string jstring_to_string(JNIEnv* env, jstring jstr) {
 /**
  * Converts a C++ std::string to Java string.
  *
+ * Memory Safety:
+ * - Returns a NEW local reference that is owned by the calling Java code
+ * - The Java GC will automatically collect this reference when no longer needed
+ * - No explicit DeleteLocalRef needed as ownership transfers to Java
+ *
+ * Performance Note:
+ * - In high-throughput scenarios (>10K req/sec), consider using
+ *   env->EnsureLocalCapacity() to pre-allocate local reference slots
+ *
  * @param env JNI environment
  * @param str C++ string
- * @return Java string
+ * @return Java string (new local reference, owned by Java)
  */
 jstring string_to_jstring(JNIEnv* env, const std::string& str) {
     return env->NewStringUTF(str.c_str());
@@ -174,6 +232,12 @@ JNIEXPORT jstring JNICALL Java_global_tada_valhalla_Actor_nativeRoute(JNIEnv* en
                                                                         jobject /* obj */,
                                                                         jlong handle,
                                                                         jstring request_str) {
+    // Pre-allocate local reference slots for high-throughput scenarios
+    // Prevents JVM from needing to expand local ref table during execution
+    if (env->EnsureLocalCapacity(5) != 0) {
+        return nullptr; // Out of memory
+    }
+
     try {
         vt::actor_t* actor = handle_to_actor(handle);
         if (actor == nullptr) {
