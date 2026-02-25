@@ -1,8 +1,8 @@
 # Valhalla JNI Bindings - Production Deployment Guide
 
-Complete guide for deploying Valhalla JNI bindings in production environments with Docker, Kubernetes, monitoring, and scaling strategies.
+Complete guide for deploying Valhalla JNI bindings in production environments with Docker, AWS ECS, monitoring, and scaling strategies.
 
-**Date**: February 23, 2026
+**Date**: February 25, 2026
 **Branch**: `master`
 **Target Audience**: DevOps Engineers, SREs, Platform Engineers
 
@@ -12,7 +12,7 @@ Complete guide for deploying Valhalla JNI bindings in production environments wi
 
 1. [Production Architecture](#production-architecture)
 2. [Docker Deployment](#docker-deployment)
-3. [Kubernetes Deployment](#kubernetes-deployment)
+3. [AWS ECS Deployment](#aws-ecs-deployment)
 4. [Configuration Management](#configuration-management)
 5. [Monitoring & Observability](#monitoring--observability)
 6. [Scaling Strategies](#scaling-strategies)
@@ -270,7 +270,7 @@ services:
       - "3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./grafana-dashboards:/etc/grafana/provisioning/dashboards:ro
+      # Note: Grafana monitoring removed, to be replaced with Datadog in Phase 6
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     networks:
@@ -300,411 +300,295 @@ docker-compose logs -f valhalla-jni
 
 ---
 
-## ☸️ Kubernetes Deployment
+## ☁️ AWS ECS Deployment
 
-### Namespace
+### Prerequisites
 
-**File**: `k8s/namespace.yaml`
+1. **AWS Account** with ECS permissions
+2. **ECR Repository** for Docker images
+3. **EFS Filesystem** for shared tile storage (optional, can use EBS)
+4. **VPC** with public/private subnets
+5. **Application Load Balancer** (ALB)
 
-```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: valhalla
-  labels:
-    name: valhalla
-    environment: production
+### Push Image to ECR
+
+```bash
+# Authenticate to ECR
+aws ecr get-login-password --region us-east-1 | \
+    docker login --username AWS --password-stdin YOUR_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com
+
+# Build and tag image
+docker build -f docker/Dockerfile.prod -t valhalla-jni:latest .
+docker tag valhalla-jni:latest YOUR_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/valhalla-jni:latest
+
+# Push to ECR
+docker push YOUR_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/valhalla-jni:latest
 ```
 
-### ConfigMap
+### ECS Task Definition
 
-**File**: `k8s/configmap.yaml`
+**File**: `ecs-task-definition.json`
 
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: valhalla-config
-  namespace: valhalla
-data:
-  VALHALLA_TILE_DIR: "/var/valhalla/tiles"
-  JAVA_OPTS: "-Xmx4g -Xms2g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
-  LOG_LEVEL: "INFO"
-
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: valhalla-regions-config
-  namespace: valhalla
-data:
-  regions.json: |
+```json
+{
+  "family": "valhalla-jni",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "8192",
+  "executionRoleArn": "arn:aws:iam::YOUR_ACCOUNT:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::YOUR_ACCOUNT:role/valhalla-jni-task-role",
+  "containerDefinitions": [
     {
-      "regions": {
-        "singapore": {
-          "name": "Singapore",
-          "enabled": true,
-          "tile_dir": "/var/valhalla/tiles/singapore",
-          "bounds": {
-            "min_lat": 1.15,
-            "max_lat": 1.48,
-            "min_lon": 103.6,
-            "max_lon": 104.0
-          },
-          "default_costing": "auto",
-          "supported_costings": ["auto", "taxi", "motorcycle"]
+      "name": "valhalla-jni",
+      "image": "YOUR_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/valhalla-jni:latest",
+      "cpu": 2048,
+      "memory": 8192,
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "VALHALLA_TILE_DIR",
+          "value": "/var/valhalla/tiles"
+        },
+        {
+          "name": "JAVA_OPTS",
+          "value": "-Xmx6g -Xms4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "tiles",
+          "containerPath": "/var/valhalla/tiles",
+          "readOnly": true
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/valhalla-jni",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"],
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 60
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "tiles",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-XXXXXXXX",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "iam": "ENABLED"
         }
       }
     }
+  ]
+}
 ```
 
-### Persistent Volume
-
-**File**: `k8s/pv-tiles.yaml`
-
-```yaml
-# For NFS-based tile storage
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: valhalla-tiles-pv
-spec:
-  capacity:
-    storage: 100Gi
-  accessModes:
-    - ReadOnlyMany
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: nfs
-  nfs:
-    server: nfs-server.example.com
-    path: /mnt/valhalla/tiles
-    readOnly: true
-
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: valhalla-tiles-pvc
-  namespace: valhalla
-spec:
-  accessModes:
-    - ReadOnlyMany
-  storageClassName: nfs
-  resources:
-    requests:
-      storage: 100Gi
-```
-
-### Deployment
-
-**File**: `k8s/deployment.yaml`
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: valhalla-jni
-  namespace: valhalla
-  labels:
-    app: valhalla-jni
-    version: v1
-spec:
-  replicas: 3
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
-  selector:
-    matchLabels:
-      app: valhalla-jni
-  template:
-    metadata:
-      labels:
-        app: valhalla-jni
-        version: v1
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
-        prometheus.io/path: "/metrics"
-    spec:
-      # Security context
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
-
-      # Node affinity (prefer nodes with SSD)
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: disk-type
-                    operator: In
-                    values:
-                      - ssd
-
-        # Pod anti-affinity (spread across nodes)
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchExpressions:
-                    - key: app
-                      operator: In
-                      values:
-                        - valhalla-jni
-                topologyKey: kubernetes.io/hostname
-
-      containers:
-        - name: valhalla-jni
-          image: your-registry/valhalla-jni:latest
-          imagePullPolicy: Always
-
-          ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
-
-          env:
-            - name: VALHALLA_TILE_DIR
-              valueFrom:
-                configMapKeyRef:
-                  name: valhalla-config
-                  key: VALHALLA_TILE_DIR
-            - name: JAVA_OPTS
-              valueFrom:
-                configMapKeyRef:
-                  name: valhalla-config
-                  key: JAVA_OPTS
-            - name: POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-            - name: POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-
-          resources:
-            requests:
-              memory: "4Gi"
-              cpu: "2000m"
-            limits:
-              memory: "8Gi"
-              cpu: "4000m"
-
-          volumeMounts:
-            # Tile data (read-only)
-            - name: tiles
-              mountPath: /var/valhalla/tiles
-              readOnly: true
-            # Config files
-            - name: config
-              mountPath: /app/config
-              readOnly: true
-            # Logs (ephemeral)
-            - name: logs
-              mountPath: /var/log/valhalla
-
-          # Liveness probe
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8080
-            initialDelaySeconds: 60
-            periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 3
-
-          # Readiness probe
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 8080
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-
-          # Startup probe (for slow starts)
-          startupProbe:
-            httpGet:
-              path: /health
-              port: 8080
-            initialDelaySeconds: 10
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 12  # 2 minutes max
-
-      volumes:
-        - name: tiles
-          persistentVolumeClaim:
-            claimName: valhalla-tiles-pvc
-        - name: config
-          configMap:
-            name: valhalla-regions-config
-        - name: logs
-          emptyDir: {}
-
-      # Graceful shutdown
-      terminationGracePeriodSeconds: 30
-```
-
-### Service
-
-**File**: `k8s/service.yaml`
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: valhalla-jni
-  namespace: valhalla
-  labels:
-    app: valhalla-jni
-spec:
-  type: ClusterIP
-  ports:
-    - port: 80
-      targetPort: 8080
-      protocol: TCP
-      name: http
-  selector:
-    app: valhalla-jni
-```
-
-### Horizontal Pod Autoscaler
-
-**File**: `k8s/hpa.yaml`
-
-```yaml
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: valhalla-jni-hpa
-  namespace: valhalla
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: valhalla-jni
-  minReplicas: 3
-  maxReplicas: 20
-  metrics:
-    # CPU-based scaling
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
-
-    # Memory-based scaling
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: Utilization
-          averageUtilization: 80
-
-    # Custom metric: requests per second
-    - type: Pods
-      pods:
-        metric:
-          name: http_requests_per_second
-        target:
-          type: AverageValue
-          averageValue: "500"
-
-  behavior:
-    scaleUp:
-      stabilizationWindowSeconds: 60
-      policies:
-        - type: Percent
-          value: 50
-          periodSeconds: 60
-        - type: Pods
-          value: 2
-          periodSeconds: 60
-      selectPolicy: Max
-
-    scaleDown:
-      stabilizationWindowSeconds: 300
-      policies:
-        - type: Percent
-          value: 25
-          periodSeconds: 60
-        - type: Pods
-          value: 1
-          periodSeconds: 60
-      selectPolicy: Min
-```
-
-### Ingress
-
-**File**: `k8s/ingress.yaml`
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: valhalla-jni-ingress
-  namespace: valhalla
-  annotations:
-    kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/rate-limit: "1000"
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-spec:
-  tls:
-    - hosts:
-        - routing.example.com
-      secretName: valhalla-tls
-  rules:
-    - host: routing.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: valhalla-jni
-                port:
-                  number: 80
-```
-
-### Deploy to Kubernetes
+### Create ECS Cluster
 
 ```bash
-# Create namespace
-kubectl apply -f k8s/namespace.yaml
+# Create cluster
+aws ecs create-cluster \
+    --cluster-name valhalla-production \
+    --region us-east-1
 
-# Create ConfigMaps
-kubectl apply -f k8s/configmap.yaml
+# Register task definition
+aws ecs register-task-definition \
+    --cli-input-json file://ecs-task-definition.json
 
-# Create PV/PVC
-kubectl apply -f k8s/pv-tiles.yaml
+# Create CloudWatch log group
+aws logs create-log-group \
+    --log-group-name /ecs/valhalla-jni \
+    --region us-east-1
+```
 
-# Deploy application
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
-kubectl apply -f k8s/hpa.yaml
-kubectl apply -f k8s/ingress.yaml
+### Create ECS Service with ALB
 
-# Check deployment
-kubectl get pods -n valhalla
-kubectl get svc -n valhalla
-kubectl get hpa -n valhalla
+```bash
+# Create service
+aws ecs create-service \
+    --cluster valhalla-production \
+    --service-name valhalla-jni-service \
+    --task-definition valhalla-jni:1 \
+    --desired-count 3 \
+    --launch-type FARGATE \
+    --platform-version LATEST \
+    --network-configuration "awsvpcConfiguration={
+        subnets=[subnet-xxx,subnet-yyy],
+        securityGroups=[sg-xxx],
+        assignPublicIp=DISABLED
+    }" \
+    --load-balancers "targetGroupArn=arn:aws:elasticloadbalancing:us-east-1:YOUR_ACCOUNT:targetgroup/valhalla-tg/xxx,
+        containerName=valhalla-jni,
+        containerPort=8080" \
+    --health-check-grace-period-seconds 120 \
+    --deployment-configuration "maximumPercent=200,minimumHealthyPercent=100,
+        deploymentCircuitBreaker={enable=true,rollback=true}"
+```
 
-# Check logs
-kubectl logs -f deployment/valhalla-jni -n valhalla
+### Auto Scaling Configuration
 
-# Exec into pod
-kubectl exec -it -n valhalla deployment/valhalla-jni -- bash
+```bash
+# Register scalable target
+aws application-autoscaling register-scalable-target \
+    --service-namespace ecs \
+    --resource-id service/valhalla-production/valhalla-jni-service \
+    --scalable-dimension ecs:service:DesiredCount \
+    --min-capacity 3 \
+    --max-capacity 20
+
+# Create scaling policy (CPU-based)
+aws application-autoscaling put-scaling-policy \
+    --service-namespace ecs \
+    --resource-id service/valhalla-production/valhalla-jni-service \
+    --scalable-dimension ecs:service:DesiredCount \
+    --policy-name valhalla-cpu-scaling \
+    --policy-type TargetTrackingScaling \
+    --target-tracking-scaling-policy-configuration '{
+        "TargetValue": 70.0,
+        "PredefinedMetricSpecification": {
+            "PredefinedMetricType": "ECSServiceAverageCPUUtilization"
+        },
+        "ScaleInCooldown": 300,
+        "ScaleOutCooldown": 60
+    }'
+
+# Create scaling policy (Memory-based)
+aws application-autoscaling put-scaling-policy \
+    --service-namespace ecs \
+    --resource-id service/valhalla-production/valhalla-jni-service \
+    --scalable-dimension ecs:service:DesiredCount \
+    --policy-name valhalla-memory-scaling \
+    --policy-type TargetTrackingScaling \
+    --target-tracking-scaling-policy-configuration '{
+        "TargetValue": 80.0,
+        "PredefinedMetricSpecification": {
+            "PredefinedMetricType": "ECSServiceAverageMemoryUtilization"
+        },
+        "ScaleInCooldown": 300,
+        "ScaleOutCooldown": 60
+    }'
+```
+
+### EFS Setup for Tile Storage
+
+```bash
+# Create EFS filesystem
+aws efs create-file-system \
+    --performance-mode generalPurpose \
+    --throughput-mode bursting \
+    --encrypted \
+    --tags Key=Name,Value=valhalla-tiles \
+    --region us-east-1
+
+# Create mount targets in each subnet
+aws efs create-mount-target \
+    --file-system-id fs-XXXXXXXX \
+    --subnet-id subnet-xxx \
+    --security-groups sg-efs \
+    --region us-east-1
+
+# Mount EFS and upload tiles (from EC2 instance)
+sudo mkdir -p /mnt/efs
+sudo mount -t efs -o tls fs-XXXXXXXX:/ /mnt/efs
+sudo aws s3 sync s3://your-tiles-bucket/ /mnt/efs/tiles/
+```
+
+### Monitoring with CloudWatch
+
+```bash
+# Create CloudWatch dashboard
+aws cloudwatch put-dashboard \
+    --dashboard-name valhalla-jni-production \
+    --dashboard-body file://cloudwatch-dashboard.json
+
+# Create alarms
+aws cloudwatch put-metric-alarm \
+    --alarm-name valhalla-high-cpu \
+    --alarm-description "Valhalla ECS service high CPU" \
+    --metric-name CPUUtilization \
+    --namespace AWS/ECS \
+    --statistic Average \
+    --period 300 \
+    --threshold 80 \
+    --comparison-operator GreaterThanThreshold \
+    --evaluation-periods 2 \
+    --dimensions Name=ServiceName,Value=valhalla-jni-service \
+                 Name=ClusterName,Value=valhalla-production
+
+aws cloudwatch put-metric-alarm \
+    --alarm-name valhalla-high-memory \
+    --alarm-description "Valhalla ECS service high memory" \
+    --metric-name MemoryUtilization \
+    --namespace AWS/ECS \
+    --statistic Average \
+    --period 300 \
+    --threshold 85 \
+    --comparison-operator GreaterThanThreshold \
+    --evaluation-periods 2 \
+    --dimensions Name=ServiceName,Value=valhalla-jni-service \
+                 Name=ClusterName,Value=valhalla-production
+```
+
+### Deployment Updates
+
+```bash
+# Update task definition with new image
+aws ecs register-task-definition \
+    --cli-input-json file://ecs-task-definition.json
+
+# Update service to use new task definition
+aws ecs update-service \
+    --cluster valhalla-production \
+    --service valhalla-jni-service \
+    --task-definition valhalla-jni:2 \
+    --force-new-deployment
+
+# Monitor deployment
+aws ecs describe-services \
+    --cluster valhalla-production \
+    --services valhalla-jni-service \
+    --query 'services[0].deployments'
+```
+
+### Verify Deployment
+
+```bash
+# Check service status
+aws ecs describe-services \
+    --cluster valhalla-production \
+    --services valhalla-jni-service
+
+# Check running tasks
+aws ecs list-tasks \
+    --cluster valhalla-production \
+    --service-name valhalla-jni-service
+
+# View logs
+aws logs tail /ecs/valhalla-jni --follow
+
+# Test via ALB
+curl https://routing.example.com/health
 ```
 
 ---
@@ -839,7 +723,7 @@ fun route(request: RouteRequest): RouteResponse {
 - JVM heap usage
 - GC pause time
 
-**Sample Dashboard JSON**: See `k8s/grafana-dashboards/valhalla-dashboard.json`
+**Note**: Grafana monitoring is being replaced with Datadog in Phase 6. Sample dashboards will be provided in the Datadog integration.
 
 ### Alerting Rules
 
@@ -897,71 +781,85 @@ spec:
 
 ## 🚀 Scaling Strategies
 
-### Vertical Scaling
+### Vertical Scaling (Docker Compose)
 
-Increase resources per pod:
+Increase resources per container:
 
 ```yaml
-resources:
-  requests:
-    memory: "8Gi"   # Increased from 4Gi
-    cpu: "4000m"    # Increased from 2000m
-  limits:
-    memory: "16Gi"  # Increased from 8Gi
-    cpu: "8000m"    # Increased from 4000m
+# docker-compose.yml
+services:
+  valhalla-jni:
+    deploy:
+      resources:
+        limits:
+          cpus: '8'      # Increased from 4
+          memory: 16G    # Increased from 8G
+        reservations:
+          cpus: '4'      # Increased from 2
+          memory: 8G     # Increased from 4G
 ```
 
-### Horizontal Scaling
+### Vertical Scaling (ECS)
 
-Increase number of pods (via HPA):
+Update task definition with more resources:
+
+```json
+{
+  "cpu": "4096",     // Increased from 2048
+  "memory": "16384"  // Increased from 8192
+}
+```
+
+### Horizontal Scaling (Docker Compose)
+
+Use Docker Swarm for multiple replicas:
+
+```bash
+# Initialize swarm
+docker swarm init
+
+# Deploy stack with 5 replicas
+docker stack deploy -c docker-compose.yml valhalla
+
+# Scale service
+docker service scale valhalla_valhalla-jni=10
+```
+
+### Horizontal Scaling (ECS)
+
+Update desired task count:
 
 ```bash
 # Manual scaling
-kubectl scale deployment valhalla-jni --replicas=10 -n valhalla
+aws ecs update-service \
+    --cluster valhalla-production \
+    --service valhalla-jni-service \
+    --desired-count 10
 
-# Auto-scaling (HPA configured above)
-# Scales between 3-20 pods based on CPU/memory/custom metrics
+# Auto-scaling (configured in ECS section above)
+# Scales between 3-20 tasks based on CPU/memory metrics
 ```
 
 ### Regional Scaling
 
-Deploy separate instances per region:
+Deploy separate ECS services per region:
 
-```yaml
-# Singapore deployment
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: valhalla-jni-singapore
-spec:
-  template:
-    spec:
-      containers:
-        - name: valhalla-jni
-          env:
-            - name: VALHALLA_REGION
-              value: "singapore"
-          volumeMounts:
-            - name: tiles
-              mountPath: /var/valhalla/tiles/singapore
+```bash
+# Singapore service
+aws ecs create-service \
+    --cluster valhalla-production \
+    --service-name valhalla-jni-singapore \
+    --task-definition valhalla-jni:1 \
+    --desired-count 3
 
----
-# Thailand deployment
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: valhalla-jni-thailand
-spec:
-  template:
-    spec:
-      containers:
-        - name: valhalla-jni
-          env:
-            - name: VALHALLA_REGION
-              value: "thailand"
-          volumeMounts:
-            - name: tiles
-              mountPath: /var/valhalla/tiles/thailand
+# Thailand service
+aws ecs create-service \
+    --cluster valhalla-production \
+    --service-name valhalla-jni-thailand \
+    --task-definition valhalla-jni-thailand:1 \
+    --desired-count 5
+
+# Use ALB target groups for region routing
 ```
 
 ---
@@ -971,7 +869,7 @@ spec:
 ### Container Security
 
 ```dockerfile
-# Run as non-root
+# Run as non-root (already in Dockerfile.prod)
 USER 1000:1000
 
 # Read-only root filesystem
@@ -979,62 +877,96 @@ docker run --read-only --tmpfs /tmp valhalla-jni:latest
 
 # Drop capabilities
 docker run --cap-drop=ALL valhalla-jni:latest
+
+# No privileged mode
+docker run --security-opt=no-new-privileges:true valhalla-jni:latest
 ```
 
-### Network Policies
+### ECS Security
 
-**File**: `k8s/network-policy.yaml`
+**IAM Task Role** (least privilege):
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: valhalla-jni-netpol
-  namespace: valhalla
-spec:
-  podSelector:
-    matchLabels:
-      app: valhalla-jni
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    # Allow from ingress controller
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              name: ingress-nginx
-      ports:
-        - protocol: TCP
-          port: 8080
-  egress:
-    # Allow DNS
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              name: kube-system
-      ports:
-        - protocol: UDP
-          port: 53
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "elasticfilesystem:ClientRead",
+        "elasticfilesystem:ClientMount"
+      ],
+      "Resource": "arn:aws:elasticfilesystem:us-east-1:YOUR_ACCOUNT:file-system/fs-XXXXXXXX"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:us-east-1:YOUR_ACCOUNT:log-group:/ecs/valhalla-jni:*"
+    }
+  ]
+}
 ```
 
-### Pod Security Policy
+### VPC Security Groups
 
-```yaml
-apiVersion: policy/v1beta1
-kind: PodSecurityPolicy
-metadata:
-  name: valhalla-psp
-spec:
-  privileged: false
-  allowPrivilegeEscalation: false
-  requiredDropCapabilities:
-    - ALL
-  runAsUser:
-    rule: MustRunAsNonRoot
-  fsGroup:
-    rule: RunAsAny
-  readOnlyRootFilesystem: true
+```bash
+# Create security group for ECS tasks
+aws ec2 create-security-group \
+    --group-name valhalla-jni-sg \
+    --description "Security group for Valhalla JNI ECS tasks" \
+    --vpc-id vpc-xxx
+
+# Allow inbound from ALB only
+aws ec2 authorize-security-group-ingress \
+    --group-id sg-xxx \
+    --protocol tcp \
+    --port 8080 \
+    --source-group sg-alb
+
+# Allow outbound to EFS
+aws ec2 authorize-security-group-egress \
+    --group-id sg-xxx \
+    --protocol tcp \
+    --port 2049 \
+    --destination-group sg-efs
+```
+
+### Secrets Management
+
+**Use AWS Secrets Manager**:
+
+```bash
+# Store secret
+aws secretsmanager create-secret \
+    --name valhalla/prod/api-key \
+    --secret-string "YOUR_API_KEY"
+
+# Reference in ECS task definition
+{
+  "secrets": [
+    {
+      "name": "API_KEY",
+      "valueFrom": "arn:aws:secretsmanager:us-east-1:YOUR_ACCOUNT:secret:valhalla/prod/api-key"
+    }
+  ]
+}
+```
+
+### Network Encryption
+
+```bash
+# Enable EFS encryption in transit (already configured in ECS task definition)
+"transitEncryption": "ENABLED"
+
+# Use HTTPS/TLS on ALB
+aws elbv2 create-listener \
+    --load-balancer-arn arn:aws:elasticloadbalancing:... \
+    --protocol HTTPS \
+    --port 443 \
+    --certificates CertificateArn=arn:aws:acm:...
 ```
 
 ---
@@ -1067,18 +999,38 @@ git push
 1. **RPO** (Recovery Point Objective): 24 hours (daily tile backups)
 2. **RTO** (Recovery Time Objective): 30 minutes (restore from backup)
 
-**Recovery Steps**:
+**Recovery Steps (ECS)**:
+```bash
+# 1. Restore tiles to EFS
+aws s3 sync s3://backups/valhalla/tiles/ /mnt/efs/tiles/
+
+# 2. Redeploy ECS service
+aws ecs update-service \
+    --cluster valhalla-production \
+    --service valhalla-jni-service \
+    --force-new-deployment
+
+# 3. Verify health
+aws ecs describe-services \
+    --cluster valhalla-production \
+    --services valhalla-jni-service
+
+curl https://routing.example.com/health
+```
+
+**Recovery Steps (Docker)**:
 ```bash
 # 1. Restore tiles from backup
 aws s3 sync s3://backups/valhalla/tiles/ /mnt/valhalla/tiles/
 
-# 2. Redeploy from Git
-git checkout master
-kubectl apply -f k8s/
+# 2. Redeploy containers
+docker-compose down
+docker-compose pull
+docker-compose up -d
 
 # 3. Verify health
-kubectl get pods -n valhalla
-curl https://routing.example.com/health
+docker-compose ps
+curl http://localhost:8080/health
 ```
 
 ---
@@ -1113,38 +1065,145 @@ sysctl -w net.ipv4.tcp_max_syn_backlog=8192
 
 ## 🐛 Troubleshooting
 
-### High Memory Usage
+### High Memory Usage (ECS)
 
 ```bash
-# Check memory
-kubectl top pods -n valhalla
+# Check ECS task metrics
+aws cloudwatch get-metric-statistics \
+    --namespace AWS/ECS \
+    --metric-name MemoryUtilization \
+    --dimensions Name=ServiceName,Value=valhalla-jni-service \
+                 Name=ClusterName,Value=valhalla-production \
+    --start-time 2026-02-25T00:00:00Z \
+    --end-time 2026-02-25T23:59:59Z \
+    --period 300 \
+    --statistics Average
 
-# Heap dump
-kubectl exec -it -n valhalla deployment/valhalla-jni -- \
-    jmap -dump:live,format=b,file=/tmp/heap.hprof $(pgrep java)
+# Get task ARN and exec into container
+TASK_ARN=$(aws ecs list-tasks --cluster valhalla-production --service-name valhalla-jni-service --query 'taskArns[0]' --output text)
+
+aws ecs execute-command \
+    --cluster valhalla-production \
+    --task $TASK_ARN \
+    --container valhalla-jni \
+    --interactive \
+    --command "jmap -dump:live,format=b,file=/tmp/heap.hprof \$(pgrep java)"
 
 # Analyze with MAT or VisualVM
 ```
 
-### High CPU Usage
+### High Memory Usage (Docker)
 
 ```bash
-# Profile CPU
-kubectl exec -it -n valhalla deployment/valhalla-jni -- \
-    jcmd $(pgrep java) JFR.start duration=60s filename=/tmp/profile.jfr
+# Check container stats
+docker stats valhalla-jni
+
+# Heap dump
+docker exec -it valhalla-jni \
+    jmap -dump:live,format=b,file=/tmp/heap.hprof $(docker exec valhalla-jni pgrep java)
+
+# Copy heap dump out
+docker cp valhalla-jni:/tmp/heap.hprof ./heap.hprof
+
+# Analyze with MAT or VisualVM
+```
+
+### High CPU Usage (ECS)
+
+```bash
+# Check CPU metrics
+aws cloudwatch get-metric-statistics \
+    --namespace AWS/ECS \
+    --metric-name CPUUtilization \
+    --dimensions Name=ServiceName,Value=valhalla-jni-service \
+    --start-time 2026-02-25T00:00:00Z \
+    --end-time 2026-02-25T23:59:59Z \
+    --period 300 \
+    --statistics Average
+
+# Profile with JFR
+aws ecs execute-command \
+    --cluster valhalla-production \
+    --task $TASK_ARN \
+    --container valhalla-jni \
+    --interactive \
+    --command "jcmd \$(pgrep java) JFR.start duration=60s filename=/tmp/profile.jfr"
+```
+
+### High CPU Usage (Docker)
+
+```bash
+# Check CPU usage
+docker stats valhalla-jni
+
+# Profile with JFR
+docker exec -it valhalla-jni \
+    jcmd $(docker exec valhalla-jni pgrep java) JFR.start duration=60s filename=/tmp/profile.jfr
+
+# Copy profile out
+docker cp valhalla-jni:/tmp/profile.jfr ./profile.jfr
 
 # Analyze with JMC
 ```
 
-### Slow Routes
+### Slow Routes (ECS)
 
 ```bash
-# Check tile cache
+# Check logs
+aws logs tail /ecs/valhalla-jni --follow --filter-pattern "route calculation"
+
+# Enable debug logging (update task definition environment variable)
+# LOG_LEVEL=DEBUG
+
+# Check tile access
+aws efs describe-file-systems --file-system-id fs-XXXXXXXX
+```
+
+### Slow Routes (Docker)
+
+```bash
+# Check logs
+docker logs -f valhalla-jni | grep "route calculation"
+
 # Enable debug logging
-kubectl set env deployment/valhalla-jni LOG_LEVEL=DEBUG -n valhalla
+docker-compose exec valhalla-jni \
+    /bin/sh -c 'export LOG_LEVEL=DEBUG && java -jar /app/your-app.jar'
+
+# Check tile mount
+docker exec valhalla-jni ls -lh /var/valhalla/tiles/
+```
+
+### Container Won't Start (Docker)
+
+```bash
+# Check logs
+docker logs valhalla-jni
+
+# Common issues:
+# 1. Tiles not mounted: Check volume mount
+docker inspect valhalla-jni | grep Mounts -A 10
+
+# 2. Memory limit: Increase in docker-compose.yml
+# 3. Port conflict: Check port 8080
+netstat -tuln | grep 8080
+```
+
+### ECS Tasks Failing
+
+```bash
+# Check task stopped reason
+aws ecs describe-tasks \
+    --cluster valhalla-production \
+    --tasks $TASK_ARN \
+    --query 'tasks[0].stoppedReason'
 
 # Check logs
-kubectl logs -f deployment/valhalla-jni -n valhalla | grep "route calculation"
+aws logs tail /ecs/valhalla-jni --follow
+
+# Common issues:
+# 1. EFS mount failed: Check security groups
+# 2. Health check failed: Verify /health endpoint
+# 3. Resource limits: Increase CPU/memory in task definition
 ```
 
 ---
@@ -1153,17 +1212,22 @@ kubectl logs -f deployment/valhalla-jni -n valhalla | grep "route calculation"
 
 Before going live:
 
-- [ ] Docker image built and tested
-- [ ] Kubernetes manifests validated
-- [ ] Tile data uploaded and verified
-- [ ] Configuration validated (no errors)
-- [ ] Health checks passing
-- [ ] Monitoring dashboards created
-- [ ] Alerting rules configured
-- [ ] Auto-scaling tested
+- [ ] Docker image built and tested (`docker/Dockerfile.prod`)
+- [ ] Image pushed to container registry (ECR/Docker Hub)
+- [ ] Tile data uploaded to shared storage (EFS/S3/NFS)
+- [ ] Configuration validated (`config/regions/regions.json`)
+- [ ] Environment variables configured (`VALHALLA_TILE_DIR`, `JAVA_OPTS`)
+- [ ] Health checks passing (`/health` endpoint)
+- [ ] Monitoring configured (CloudWatch/Prometheus)
+- [ ] Alerting rules created (high CPU/memory/error rate)
+- [ ] Auto-scaling configured (ECS auto-scaling or Docker Swarm)
+- [ ] Load balancer configured (ALB with health checks)
+- [ ] Security groups configured (allow only necessary traffic)
+- [ ] IAM roles configured (least privilege)
 - [ ] Disaster recovery plan documented
-- [ ] Load testing completed
-- [ ] Security hardening applied
+- [ ] Load testing completed (verify throughput targets)
+- [ ] Security hardening applied (non-root user, read-only filesystem)
+- [ ] Backup strategy implemented (S3 tile backups)
 - [ ] Documentation reviewed
 
 **Ready for production! 🚀**
@@ -1174,8 +1238,10 @@ Before going live:
 
 - **Quick Start**: See [QUICKSTART.md](QUICKSTART.md)
 - **Development**: See [DEVELOPMENT.md](DEVELOPMENT.md)
-- **Kubernetes Best Practices**: https://kubernetes.io/docs/concepts/configuration/overview/
+- **Adding Regions**: See [ADDING_REGIONS.md](../regions/ADDING_REGIONS.md)
 - **Docker Best Practices**: https://docs.docker.com/develop/dev-best-practices/
+- **AWS ECS Best Practices**: https://docs.aws.amazon.com/AmazonECS/latest/bestpracticesguide/intro.html
+- **AWS EFS Best Practices**: https://docs.aws.amazon.com/efs/latest/ug/performance.html
 
 ---
 

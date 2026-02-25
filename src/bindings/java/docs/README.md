@@ -62,7 +62,7 @@ docs/
 ### For DevOps/SRE
 **Production deployment**: [PRODUCTION.md](guides/PRODUCTION.md)
 - Docker deployment
-- Kubernetes manifests
+- AWS ECS deployment
 - Monitoring setup
 - Scaling strategies
 
@@ -110,7 +110,7 @@ docs/
 4. Contribute: See "Contributing" section in DEVELOPMENT.md
 
 ### I'm a DevOps Engineer
-1. Deploy: [PRODUCTION.md](guides/PRODUCTION.md) → "Docker Deployment" or "Kubernetes Deployment"
+1. Deploy: [PRODUCTION.md](guides/PRODUCTION.md) → "Docker Deployment" or "AWS ECS Deployment"
 2. Monitor: [TESTING_MONITORING_GUIDE.md](guides/TESTING_MONITORING_GUIDE.md) → "Monitoring Setup"
 3. Scale: [PRODUCTION.md](guides/PRODUCTION.md) → "Scaling Strategies"
 4. Troubleshoot: See "Troubleshooting" sections in both guides
@@ -142,8 +142,8 @@ docs/
 # See: PRODUCTION.md → "Docker Deployment"
 docker-compose up -d
 
-# Or Kubernetes: PRODUCTION.md → "Kubernetes Deployment"
-kubectl apply -f k8s/
+# Or AWS ECS: PRODUCTION.md → "AWS ECS Deployment"
+aws ecs create-service --cluster valhalla-production ...
 ```
 
 ### Task: Setup Monitoring
@@ -173,7 +173,7 @@ Detailed documentation of the 5 implementation phases:
 ### Phase 3: Documentation Consolidation
 **Doc**: [implementation/PHASE3_IMPLEMENTATION.md](implementation/PHASE3_IMPLEMENTATION.md)
 - User/Developer/DevOps guides created
-- Docker/Kubernetes templates
+- Docker deployment templates
 - Deployment documentation
 
 ### Phase 4: Build Optimization
@@ -214,7 +214,7 @@ Documents in `archived/` have been superseded by newer guides:
 
 ### Deployment
 - Docker: [PRODUCTION.md](guides/PRODUCTION.md#docker-deployment)
-- Kubernetes: [PRODUCTION.md](guides/PRODUCTION.md#kubernetes-deployment)
+- AWS ECS: [PRODUCTION.md](guides/PRODUCTION.md#aws-ecs-deployment)
 - Scaling: [PRODUCTION.md](guides/PRODUCTION.md#scaling-strategies)
 
 ### Monitoring
