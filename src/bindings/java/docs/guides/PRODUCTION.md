@@ -667,9 +667,7 @@ vault kv put secret/valhalla/prod api_key=YOUR_API_KEY
 **Expose metrics** in your application:
 
 ```kotlin
-import io.prometheus.client.Counter
-import io.prometheus.client.Histogram
-
+// ValhallaMetrics.kt
 object ValhallaMetrics {
     val routeRequests = Counter.build()
         .name("valhalla_route_requests_total")
@@ -805,10 +803,12 @@ Update task definition with more resources:
 
 ```json
 {
-  "cpu": "4096",     // Increased from 2048
-  "memory": "16384"  // Increased from 8192
+  "cpu": "4096",
+  "memory": "16384"
 }
 ```
+
+*Note: Increased from 2048 CPU and 8192 memory*
 
 ### Horizontal Scaling (Docker Compose)
 
