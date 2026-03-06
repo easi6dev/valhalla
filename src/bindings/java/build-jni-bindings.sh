@@ -26,9 +26,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Auto-detect project root (directory containing this script)
+# Auto-detect project root (three levels up from src/bindings/java/)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$SCRIPT_DIR"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 # Verify we're in the Valhalla project root
 if [ ! -f "$PROJECT_ROOT/CMakeLists.txt" ] || [ ! -d "$PROJECT_ROOT/src/bindings/java" ]; then
@@ -53,30 +53,32 @@ echo ""
 ################################################################################
 echo -e "${GREEN}Step 1: Installing system dependencies...${NC}"
 
-if ! command -v cmake &> /dev/null; then
-    echo -e "${YELLOW}CMake not found. Installing...${NC}"
-    sudo apt update
-    sudo apt install -y cmake
+if [[ "${SKIP_APT_INSTALL}" == "1" ]]; then
+    echo -e "${YELLOW}Skipping apt install (SKIP_APT_INSTALL=1)${NC}"
 else
-    echo -e "${GREEN}✓ CMake already installed${NC}"
-fi
+    if ! command -v cmake &> /dev/null; then
+        echo -e "${YELLOW}CMake not found. Installing...${NC}"
+        apt-get update && apt-get install -y cmake
+    else
+        echo -e "${GREEN}✓ CMake already installed${NC}"
+    fi
 
-# Install all required build dependencies
-echo -e "${YELLOW}Installing Valhalla build dependencies...${NC}"
-sudo apt install -y \
-  build-essential \
-  cmake \
-  pkg-config \
-  libboost-all-dev \
-  libprotobuf-dev \
-  protobuf-compiler \
-  libsqlite3-dev \
-  libspatialite-dev \
-  libgeos-dev \
-  libcurl4-openssl-dev \
-  zlib1g-dev \
-  liblz4-dev \
-  git
+    echo -e "${YELLOW}Installing Valhalla build dependencies...${NC}"
+    apt-get install -y \
+      build-essential \
+      cmake \
+      pkg-config \
+      libboost-all-dev \
+      libprotobuf-dev \
+      protobuf-compiler \
+      libsqlite3-dev \
+      libspatialite-dev \
+      libgeos-dev \
+      libcurl4-openssl-dev \
+      zlib1g-dev \
+      liblz4-dev \
+      git
+fi
 
 echo -e "${GREEN}✓ System dependencies installed${NC}"
 echo ""
@@ -86,29 +88,29 @@ echo ""
 ################################################################################
 echo -e "${GREEN}Step 2: Checking Java installation...${NC}"
 
-if ! command -v java &> /dev/null; then
-    echo -e "${YELLOW}Java not found. Installing OpenJDK 17...${NC}"
-    sudo apt install -y openjdk-17-jdk
+if [[ "${SKIP_APT_INSTALL}" == "1" ]]; then
+    echo -e "${YELLOW}Skipping Java install (SKIP_APT_INSTALL=1)${NC}"
 else
-    echo -e "${GREEN}✓ Java already installed${NC}"
-    java -version
+    if ! command -v java &> /dev/null; then
+        echo -e "${YELLOW}Java not found. Installing OpenJDK 17...${NC}"
+        apt-get install -y openjdk-17-jdk
+    else
+        echo -e "${GREEN}✓ Java already installed${NC}"
+        java -version
+    fi
 fi
 
-# Set JAVA_HOME
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+# Set JAVA_HOME — support both openjdk and Temurin layouts
+if [[ -z "${JAVA_HOME}" ]]; then
+    if [[ -d "/opt/java/openjdk" ]]; then
+        export JAVA_HOME=/opt/java/openjdk
+    elif [[ -d "/usr/lib/jvm/java-17-openjdk-amd64" ]]; then
+        export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+    fi
+fi
 export PATH=$JAVA_HOME/bin:$PATH
 
 echo -e "${GREEN}✓ JAVA_HOME set to: ${JAVA_HOME}${NC}"
-
-# Make JAVA_HOME persistent (add to ~/.bashrc if not already there)
-if ! grep -q "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" ~/.bashrc; then
-    echo "" >> ~/.bashrc
-    echo "# Java configuration for Valhalla JNI" >> ~/.bashrc
-    echo "export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> ~/.bashrc
-    echo "export PATH=\$JAVA_HOME/bin:\$PATH" >> ~/.bashrc
-    echo -e "${GREEN}✓ JAVA_HOME added to ~/.bashrc${NC}"
-fi
-
 echo ""
 
 ################################################################################
@@ -211,9 +213,13 @@ cd "${JAVA_BINDINGS_DIR}"
 # Make gradlew executable
 chmod +x gradlew
 
-# Clean and build
-echo -e "${YELLOW}Running Gradle clean build...${NC}"
-./gradlew clean build
+# Clean and build — skip tests in Docker/CI environments
+if [[ "${SKIP_TESTS}" == "1" ]]; then
+    echo -e "${YELLOW}Skipping tests (SKIP_TESTS=1)${NC}"
+    ./gradlew clean build -x test
+else
+    ./gradlew clean build
+fi
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}ERROR: Gradle build failed!${NC}"

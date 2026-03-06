@@ -96,8 +96,8 @@ else
 fi
 
 # Copy libvalhalla_jni.so
-if [ -f "build/src/bindings/java/libs/native/libvalhalla_jni.so" ]; then
-    cp build/src/bindings/java/libs/native/libvalhalla_jni.so "$RESOURCES_DIR/"
+if [ -f "src/bindings/java/build/libs/native/libvalhalla_jni.so" ]; then
+    cp src/bindings/java/build/libs/native/libvalhalla_jni.so "$RESOURCES_DIR/"
     echo "   ✅ libvalhalla_jni.so"
     ((COPIED_COUNT++))
 else
@@ -147,7 +147,13 @@ if [ ! -f "gradlew" ]; then
 fi
 
 chmod +x gradlew
-./gradlew clean build -x buildNative
+
+if [[ "${SKIP_TESTS}" == "1" || "${SKIP_TESTS}" == "true" ]]; then
+    echo "   Skipping tests (SKIP_TESTS=${SKIP_TESTS})"
+    ./gradlew clean build -x buildNative -x test
+else
+    ./gradlew clean build -x buildNative
+fi
 
 if [ $? -eq 0 ]; then
     echo "   ✅ JAR build successful"
@@ -179,7 +185,7 @@ fi
 echo ""
 
 # Run tests (optional)
-if [ "${SKIP_TESTS:-false}" != "true" ]; then
+if [[ "${SKIP_TESTS}" != "1" && "${SKIP_TESTS}" != "true" ]]; then
     echo "🧪 Step 7: Running integration tests"
     ./gradlew test -x buildNative
 
