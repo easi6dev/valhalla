@@ -44,7 +44,7 @@ services:
     # Environment variables
     environment:
       - VALHALLA_ENV=prod
-      - VALHALLA_TILES_DIR=/var/valhalla/tiles
+      - VALHALLA_TILE_DIR=/var/valhalla/tiles
       - JAVA_OPTS=-Xmx4g -Xms2g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
 
     # Resource limits

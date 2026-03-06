@@ -70,10 +70,12 @@ validate_tiles() {
 
     REGION_NAME=$(jq -r ".regions.${region}.name" "${REGIONS_CONFIG}")
     TILE_DIR=$(jq -r ".regions.${region}.tile_dir" "${REGIONS_CONFIG}")
-    TILE_DIR="${PROJECT_ROOT}/${TILE_DIR}"
+    TILE_DIR_ROOT="${VALHALLA_TILE_DIR:-${PROJECT_ROOT}/data/valhalla_tiles}"
+    TILE_DIR="${TILE_DIR_ROOT}/${TILE_DIR}"
 
     echo ""
     print_info "Region: ${REGION_NAME}"
+    print_info "Tile dir root: ${TILE_DIR_ROOT}"
     print_info "Tile directory: ${TILE_DIR}"
     echo ""
 
