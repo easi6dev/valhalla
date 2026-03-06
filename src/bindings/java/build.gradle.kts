@@ -6,12 +6,14 @@
 // - Build cache enabled
 // - Parallel execution
 // - Incremental compilation
-// - Code quality plugins (Detekt, KtLint)
+// - Code quality plugins (Detekt)
 // - Performance benchmarking (JMH)
 // - Documentation generation (Dokka)
 // ============================================
 
 import java.time.Instant
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -19,7 +21,6 @@ plugins {
     `maven-publish`
     alias(libs.plugins.dokka)
     alias(libs.plugins.detekt)
-    alias(libs.plugins.ktlint)
     alias(libs.plugins.jmh)
     idea
 }
@@ -74,21 +75,16 @@ dependencies {
 // ============================================
 // Kotlin Compilation Options
 // ============================================
-tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-    kotlinOptions {
-        freeCompilerArgs = listOf(
+tasks.withType<KotlinCompile>().configureEach {
+    compilerOptions {
+        freeCompilerArgs.addAll(
             "-Xjsr305=strict",                    // Strict null-safety
             "-opt-in=kotlin.RequiresOptIn",       // Opt-in annotations
             "-Xjvm-default=all",                   // Default methods in interfaces
             "-Xcontext-receivers"                  // Context receivers (Kotlin 1.9+)
         )
-        jvmTarget = "17"
-
-        // Incremental compilation
-        incremental = true
-
-        // Generate metadata for better IDE support
-        allWarningsAsErrors = false  // Set to true in CI
+        jvmTarget.set(JvmTarget.JVM_17)
+        allWarningsAsErrors.set(false)            // Set to true in CI
     }
 }
 
@@ -233,24 +229,6 @@ tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
 }
 
 // ============================================
-// Code Style (KtLint)
-// ============================================
-ktlint {
-    version.set("1.0.1")
-    debug.set(false)
-    verbose.set(false)
-    android.set(false)
-    outputToConsole.set(true)
-    outputColorName.set("RED")
-    ignoreFailures.set(true)  // Don't fail build on style violations
-
-    filter {
-        exclude("**/generated/**")
-        exclude("**/build/**")
-    }
-}
-
-// ============================================
 // Performance Benchmarking (JMH)
 // ============================================
 jmh {
@@ -388,14 +366,13 @@ val checkDependencyUpdates by tasks.registering {
 // Task: Full build with all checks
 val fullBuild by tasks.registering {
     group = "build"
-    description = "Run full build with all checks (tests, detekt, ktlint)"
+    description = "Run full build with all checks (tests, detekt, dokka)"
 
     dependsOn(
         tasks.clean,
         tasks.build,
         tasks.test,
         tasks.detekt,
-        tasks.ktlintCheck,
         tasks.dokkaHtml
     )
 

@@ -36,7 +36,6 @@ dokka = "1.9.20"
 
 # Code quality
 detekt = "1.23.6"
-ktlint = "12.1.0"
 
 # Performance
 jmh = "1.37"
@@ -74,7 +73,6 @@ kotlin = ["kotlin-stdlib", "kotlin-reflect", "kotlinx-coroutines-core"]
 logging = ["slf4j-api", "logback-classic"]
 testing = ["kotlin-test", "kotlin-test-junit", "junit-jupiter", "assertj-core"]
 jmh = ["jmh-core", "jmh-generator-annprocess"]
-
 [plugins]
 # Kotlin
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
@@ -84,7 +82,6 @@ dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
 
 # Code quality
 detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
-ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
 
 # Performance
 jmh = { id = "me.champeau.jmh", version.ref = "jmh-gradle" }
