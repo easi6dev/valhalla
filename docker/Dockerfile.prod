@@ -78,12 +78,14 @@ RUN cp src/bindings/java/build/libs/native/libvalhalla_jni.so \
     echo "✅ libvalhalla_jni.so copied to resources"
 
 # Step E: Copy libprotobuf-lite into resources (bundled with JAR for portability)
-RUN if [ -f "/usr/lib/x86_64-linux-gnu/libprotobuf-lite.so.23" ]; then \
-        cp /usr/lib/x86_64-linux-gnu/libprotobuf-lite.so.23 \
-           src/bindings/java/src/main/resources/lib/linux-amd64/ && \
-        echo "✅ libprotobuf-lite.so.23 copied"; \
+# Use glob — Ubuntu 24.04 ships libprotobuf-lite.so.32, not .so.23
+RUN lib=$(ls /usr/lib/x86_64-linux-gnu/libprotobuf-lite.so.* 2>/dev/null | grep -v '\.so\.' | head -1; \
+          ls /usr/lib/x86_64-linux-gnu/libprotobuf-lite.so.[0-9]* 2>/dev/null | head -1) && \
+    if [ -n "$lib" ]; then \
+        cp "$lib" src/bindings/java/src/main/resources/lib/linux-amd64/ && \
+        echo "✅ $(basename $lib) copied"; \
     else \
-        echo "⚠️  libprotobuf-lite.so.23 not found, skipping"; \
+        echo "⚠️  libprotobuf-lite.so.* not found — will rely on system lib at runtime"; \
     fi
 
 # Step F: Build JAR with Gradle (skip tests in Docker build)
