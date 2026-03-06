@@ -45,12 +45,6 @@ WORKDIR /build
 # Copy source code
 COPY . .
 
-# Recreate libvalhalla symlinks broken by NTFS on Windows hosts
-RUN cd src/bindings/java/src/main/resources/lib/linux-amd64 && \
-    ln -sf libvalhalla.so.3.6.2 libvalhalla.so.3 && \
-    ln -sf libvalhalla.so.3.6.2 libvalhalla.so && \
-    ls -la
-
 # Step A: Generate protobuf headers required by valhalla_jni.cc
 # CMakeLists.txt expects them at: ${VALHALLA_SOURCE_DIR}/build/src/valhalla/proto/
 RUN mkdir -p build/src/valhalla/proto && \
@@ -59,10 +53,13 @@ RUN mkdir -p build/src/valhalla/proto && \
       --cpp_out=build/src/valhalla/proto \
       proto/*.proto
 
-# Step B: Create libvalhalla symlinks (broken by NTFS on Windows hosts, already done above but re-ensure)
+# Step B: Ensure libvalhalla.so.3 and libvalhalla.so exist in resources.
+# Symlinks are stripped by NTFS on Windows hosts, so we copy the versioned file
+# under both names so Gradle bundles all three entries into the JAR.
 RUN cd src/bindings/java/src/main/resources/lib/linux-amd64 && \
-    ln -sf libvalhalla.so.3.6.2 libvalhalla.so.3 && \
-    ln -sf libvalhalla.so.3.6.2 libvalhalla.so
+    cp -n libvalhalla.so.3.6.2 libvalhalla.so.3 && \
+    cp -n libvalhalla.so.3.6.2 libvalhalla.so && \
+    ls -la
 
 # Step C: Build native JNI library with CMake
 # Runs from src/bindings/java/ so cmake .. points at src/bindings/java/CMakeLists.txt
@@ -172,4 +169,4 @@ ENV JAVA_OPTS="-Xmx4g \
 # valhalla-jni is a library JAR — no main class.
 # To verify the library works, print the bundled native libs and exit.
 # Replace this CMD with your actual application entrypoint when you have one.
-CMD ["sh", "-c", "echo '=== Valhalla JNI Library ===' && jar tf /app/valhalla-jni.jar | grep '\\.so' && echo '=== Library ready to use as dependency ==='"]
+CMD ["sh", "-c", "echo '=== Valhalla JNI Library ===' && unzip -l /app/valhalla-jni.jar | grep '\\.so' && echo '=== Library ready to use as dependency ==='"]

@@ -41,11 +41,6 @@ java {
     withJavadocJar()
 }
 
-// Configure sourcesJar to exclude symlinks
-tasks.named<Jar>("sourcesJar") {
-    exclude("**/libvalhalla.so")
-    exclude("**/libvalhalla.so.3")
-}
 
 kotlin {
     jvmToolchain(17)
@@ -166,14 +161,7 @@ val buildNative by tasks.registering(Exec::class) {
 // Resource Processing
 // ============================================
 tasks.processResources {
-    // Exclude symbolic links to avoid Gradle snapshot issues
-    exclude("**/libvalhalla.so")
-    exclude("**/libvalhalla.so.3")
-
-    // Only include actual files
-    filesMatching("**/lib/**/*.so") {
-        // This will only process regular files, not symlinks
-    }
+    // All .so files under lib/ are real files in Docker (symlinks copied as files in Step B of Dockerfile.prod)
 }
 
 // ============================================
