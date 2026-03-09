@@ -92,10 +92,16 @@ tasks.withType<KotlinCompile>().configureEach {
 // Testing Configuration
 // ============================================
 tasks.test {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        // Exclude load/stress tests from the default test run — they require explicit opt-in
+        // via ./gradlew test -Pload or the dedicated loadTest task below
+        if (!project.hasProperty("load")) {
+            excludeTags("load", "slow")
+        }
+    }
 
-    // Parallel test execution
-    maxParallelForks = Runtime.getRuntime().availableProcessors() / 2
+    // Native library is NOT thread-safe across parallel JVM forks; use 1 fork
+    maxParallelForks = 1
 
     // Run tests from the repo root so relative paths like config/regions/regions.json
     // and data/valhalla_tiles/ resolve correctly.
@@ -119,6 +125,31 @@ tasks.test {
     // Memory settings for tests
     minHeapSize = "512m"
     maxHeapSize = "2g"
+}
+
+// Dedicated task to run load/stress tests explicitly
+val loadTest by tasks.registering(Test::class) {
+    group = "verification"
+    description = "Run load and stress tests (requires Singapore tiles)"
+
+    useJUnitPlatform {
+        includeTags("load")
+    }
+
+    maxParallelForks = 1
+    workingDir = rootDir.parentFile.parentFile.parentFile
+
+    systemProperty("java.library.path",
+        "${layout.buildDirectory.get().asFile}/libs/native/Release:${System.getProperty("java.library.path")}")
+
+    testLogging {
+        events("passed", "skipped", "failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStandardStreams = true
+    }
+
+    minHeapSize = "512m"
+    maxHeapSize = "4g"
 }
 
 // ============================================
