@@ -92,7 +92,7 @@ Complete guide for testing and monitoring Valhalla JNI bindings in development, 
 
 ### JMH Benchmarks
 
-**Location**: `src/test/kotlin/global/tada/valhalla/performance/RouteBenchmark.kt`
+**Location**: `src/jmh/kotlin/global/tada/valhalla/performance/RouteBenchmark.kt`
 
 **Benchmarks**:
 1. **Simple Route** (2 points) - Target: 15ms
@@ -638,4 +638,4 @@ top -H
 
 ---
 
-**Questions?** Check the troubleshooting section or consult PHASE5_IMPLEMENTATION.md for detailed metrics and testing information.
+**Questions?** Check the troubleshooting section for detailed metrics and testing information.

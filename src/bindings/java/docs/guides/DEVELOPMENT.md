@@ -750,6 +750,8 @@ echo "✅ Test passed!"
 **Load Testing** with JMH:
 
 ```kotlin
+import global.tada.valhalla.helpers.RouteRequest
+
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)

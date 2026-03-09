@@ -1,56 +1,56 @@
 # Valhalla Integration Guide
 
-This guide explains how to integrate Valhalla routing engine into your other services.
+This guide explains how to integrate the Valhalla routing engine into your services.
+
+> **Important:** `valhalla-server` is a **test/reference service only** — a minimal Ktor HTTP wrapper used to verify the JAR locally during development. It is not intended for production use. The production integration pattern is to add `valhalla-jni.jar` as a dependency and call `Actor` directly in-process (Option 1 below).
 
 ## Architecture Options
 
-### Option 1: Direct JNI Integration (Embedded)
+### Option 1: Direct JNI Integration (Embedded) ✅ Recommended
 
-Use Valhalla JNI bindings directly within your Java/Kotlin service.
+Add `valhalla-jni.jar` as a dependency in your JVM service and call the `Actor` API in-process.
 
 **Pros:**
-- Lowest latency (in-process)
-- No network overhead
-- Simplest deployment
+- Lowest latency (in-process, no network hop)
+- No additional infrastructure
+- Self-contained deployment (native libs bundled in JAR)
+- Thread-safe — single `Actor` instance handles concurrent calls
 
 **Cons:**
-- Requires native library deployment
-- Memory overhead in application JVM
-- Must be Java/Kotlin service
+- Requires JVM service (Kotlin/Java)
+- ~500 MB memory per `Actor` instance (tiles loaded on init)
 
-**Use Case:** Best for monolithic applications or when ultra-low latency is critical.
+**Use Case:** The standard pattern for all production JVM services integrating Valhalla routing.
 
 ### Option 2: Standalone Microservice (REST API)
 
-Deploy Valhalla as a separate microservice with REST API.
+Wrap `valhalla-jni.jar` in a Spring Boot or Ktor service and expose it over HTTP.
 
 **Pros:**
-- Language-agnostic client access
-- Horizontal scaling
-- Independent deployment
-- Can use existing Valhalla HTTP service
+- Language-agnostic client access (any service can call it)
+- Horizontal scaling of the routing layer independently
+- Non-JVM services can consume routing
 
 **Cons:**
-- Network latency
-- Additional infrastructure
-- More complex deployment
+- Network latency on every routing call
+- Additional service to deploy and monitor
 
-**Use Case:** Best for microservices architecture with multiple language clients.
+**Use Case:** When you have non-JVM services (Go, Python, Node.js) that need routing, or when you want to scale the routing layer independently.
 
-### Option 3: Shared Service Library
+### Option 3: Shared Library (Maven/Nexus)
 
-Package JNI bindings as a shared library across multiple JVM services.
+Publish `valhalla-jni.jar` to your internal Nexus/Artifactory and share it across multiple JVM services.
 
 **Pros:**
-- Reusable across Java services
+- Reusable across all Java/Kotlin services in the organisation
 - Consistent versioning
-- Centralized maintenance
+- Centralised maintenance
 
 **Cons:**
 - Requires shared artifact repository
-- Native library distribution complexity
+- Each consuming service carries its own tile memory footprint
 
-**Use Case:** Best for organizations with multiple Java/Kotlin services.
+**Use Case:** Organisations with multiple JVM services all needing routing (driver dispatch, ETA calculation, service area analysis).
 
 ---
 
@@ -227,27 +227,9 @@ public class RoutingService {
 
 ---
 
-## Option 2: Standalone Microservice
+## Option 2: Standalone Microservice (Spring Boot Wrapper)
 
-### Approach A: Use Official Valhalla HTTP Service
-
-Build and deploy the official Valhalla HTTP service:
-
-```bash
-# Build Valhalla with HTTP services enabled
-cmake -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DENABLE_SERVICES=ON
-
-cmake --build build -j4
-
-# Run the service
-./build/valhalla_service /path/to/valhalla-singapore.json
-```
-
-### Approach B: Create Spring Boot Wrapper
-
-Create a Spring Boot service that wraps the JNI bindings:
+Create a Spring Boot service that embeds `valhalla-jni.jar` and exposes it over HTTP. This is appropriate when non-JVM services need routing access.
 
 ```kotlin
 @RestController
@@ -278,73 +260,42 @@ data class MatrixRequest(val source: Location, val targets: List<Location>)
 data class Location(val lat: Double, val lon: Double)
 ```
 
-### Dockerfile for Microservice
+### Dockerfile for this microservice
+
+The JAR bundles all native libraries — no need to copy `.so` files separately:
 
 ```dockerfile
-FROM openjdk:17-slim
+FROM eclipse-temurin:17-jre-noble
 
-# Install native dependencies
-RUN apt-get update && apt-get install -y \
-    libboost-all-dev \
-    libcurl4-openssl-dev \
-    libprotobuf-dev \
-    libsqlite3-dev \
-    liblz4-dev \
-    zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Copy application JAR (native libs are bundled inside)
+COPY your-routing-service.jar /app/app.jar
 
-# Copy native libraries
-COPY build/src/libvalhalla.so* /usr/local/lib/
-COPY build/src/bindings/java/libs/native/libvalhalla_jni.so /usr/local/lib/
-RUN ldconfig
-
-# Copy tile data
-COPY data/valhalla_tiles/singapore /data/valhalla_tiles/singapore
-
-# Copy application JAR
-COPY your-service.jar /app/app.jar
-
+# Tile data is mounted at runtime — not copied into the image
 WORKDIR /app
 EXPOSE 8080
 
-CMD ["java", "-jar", "app.jar"]
+ENV VALHALLA_TILE_DIR=/var/valhalla/tiles
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
 ```
 
----
-
-## Option 3: Docker Compose Integration
-
-If you're using Docker Compose for local development:
-
 ```yaml
-version: '3.8'
-
+# docker-compose for the routing microservice
 services:
-  valhalla-routing:
-    build:
-      context: ./valhalla
-      dockerfile: Dockerfile.routing-service
+  routing-service:
+    image: your-registry/routing-service:latest
     ports:
-      - "8088:8080"
+      - "8080:8080"
     volumes:
-      - ./data/valhalla_tiles:/data/valhalla_tiles:ro
+      - /path/to/tiles:/var/valhalla/tiles:ro
     environment:
-      - JAVA_OPTS=-Xmx2g
-      - VALHALLA_TILE_DIR=/data/valhalla_tiles/singapore
+      - VALHALLA_TILE_DIR=/var/valhalla/tiles
+      - VALHALLA_REGION=singapore
+      - JAVA_OPTS=-Xmx2g -Xms512m -XX:+UseG1GC
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-  your-service:
-    build: ../../../../../config
-    ports:
-      - "8080:8080"
-    depends_on:
-      - valhalla-routing
-    environment:
-      - ROUTING_SERVICE_URL=http://valhalla-routing:8080
 ```
 
 ---

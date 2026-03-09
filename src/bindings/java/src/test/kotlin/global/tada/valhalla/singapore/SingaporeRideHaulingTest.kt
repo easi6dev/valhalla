@@ -22,7 +22,7 @@ class SingaporeRideHaulingTest {
     private val testResults = mutableListOf<TestResult>()
 
     companion object {
-        private const val TILE_DIR = "../../../data/valhalla_tiles/singapore"
+        private const val TILE_DIR = "data/valhalla_tiles/singapore"
     }
 
     data class TestResult(

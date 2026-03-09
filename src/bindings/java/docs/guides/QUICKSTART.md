@@ -60,7 +60,7 @@ mkdir -p data/valhalla_tiles/singapore
 # [Add your tile download instructions here]
 
 # OR build tiles from OSM (option 2)
-./scripts/build-tiles.sh singapore
+./scripts/regions/build-tiles.sh singapore
 ```
 
 ### Step 3: Run Your First Route
@@ -69,26 +69,27 @@ mkdir -p data/valhalla_tiles/singapore
 
 ```kotlin
 import global.tada.valhalla.Actor
-import global.tada.valhalla.RouteRequest
 
 fun main() {
     // Initialize actor with Singapore region
-    val actor = Actor.createWithExternalTiles("singapore")
+    val actor = Actor.createForRegion("singapore")
 
     try {
-        // Create route request
-        val request = RouteRequest(
-            locations = listOf(
-                RouteRequest.Location(1.290270, 103.851959),  // Marina Bay
-                RouteRequest.Location(1.352083, 103.819836)   // Woodlands
-            ),
-            costing = "auto"
-        )
+        // Build route request as JSON (Actor accepts raw Valhalla JSON)
+        val request = """
+        {
+          "locations": [
+            {"lat": 1.290270, "lon": 103.851959},
+            {"lat": 1.352083, "lon": 103.819836}
+          ],
+          "costing": "auto",
+          "units": "kilometers"
+        }
+        """.trimIndent()
 
-        // Get route
+        // Get route (returns raw Valhalla JSON response)
         val response = actor.route(request)
-        println("Route distance: ${response.trip.summary.length} km")
-        println("Route time: ${response.trip.summary.time} seconds")
+        println("Route response: $response")
     } finally {
         actor.close()
     }

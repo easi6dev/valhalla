@@ -61,17 +61,17 @@ Average latency: 3.2ms
 import global.tada.valhalla.Actor
 
 // Option 1: Quick start (Singapore preset)
-val actor = Actor.createSingapore()
+val actor = Actor.createForRegion("singapore")
 
 // Option 2: Custom tile directory
-val actor = Actor.createSingapore("path/to/tiles")
+val actor = Actor.createForRegion("singapore", "path/to/tiles")
 
 // Calculate route
 val request = """
 {
   "locations": [
-    {"lat": 1.2834, "lon": 103.8607},  // Marina Bay
-    {"lat": 1.3644, "lon": 103.9915}   // Changi Airport
+    {"lat": 1.2834, "lon": 103.8607},
+    {"lat": 1.3644, "lon": 103.9915}
   ],
   "costing": "auto"
 }
@@ -89,7 +89,7 @@ actor.close()
 import global.tada.valhalla.Actor;
 
 // Create actor for Singapore
-Actor actor = Actor.createSingapore();
+Actor actor = Actor.createForRegion("singapore");
 
 // Calculate route
 String request = """
@@ -195,7 +195,7 @@ val result = actor.route(request)
 
 ### Singapore Features
 
-Automatically included in `Actor.createSingapore()`:
+Automatically included in `Actor.createForRegion("singapore")`:
 
 - ✅ **ERP Zones**: Electronic Road Pricing awareness
 - ✅ **CBD Restrictions**: Central Business District rules
@@ -206,14 +206,11 @@ Automatically included in `Actor.createSingapore()`:
 ### Custom Configuration
 
 ```kotlin
-import global.tada.valhalla.config.SingaporeConfig
+import global.tada.valhalla.config.RegionConfigFactory
 
-// Load from file
-val config = SingaporeConfig.loadFromFile("config/regions/singapore/valhalla-singapore.json")
-val actor = Actor(config)
-
-// Or build programmatically
-val config = SingaporeConfig.buildConfig(
+// Build programmatically
+val config = RegionConfigFactory.buildConfig(
+    region = "singapore",
     tileDir = "custom/path/tiles",
     enableTraffic = false
 )
@@ -274,8 +271,7 @@ Error: Location is unreachable
 - **Scripts:** `scripts/regions/singapore/*.sh`
 - **Config:** `config/regions/singapore/*.json`
 - **Tests:** `src/bindings/java/src/test/kotlin/global/tada/valhalla/singapore/`
-- **Detailed Setup:** `../temp/SETUP_GUIDE.md` (archived)
-- **Manual Build:** `../temp/BUILD_JNI_MANUAL.md` (archived)
+- **Detailed Setup:** `docs/setup/BUILD_AND_RUN.md`
 
 ---
 

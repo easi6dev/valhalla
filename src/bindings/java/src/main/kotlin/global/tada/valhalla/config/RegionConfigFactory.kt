@@ -184,7 +184,10 @@ object RegionConfigFactory {
               "node_snap_tolerance": 5,
               "street_side_tolerance": 5,
               "street_side_max_distance": 1000,
-              "heading_tolerance": 60
+              "heading_tolerance": 60,
+              "mvt_min_zoom_road_class": [9, 10, 11, 11, 12, 12, 13, 13],
+              "mvt_cache_min_zoom": 0,
+              "mvt_cache_max_zoom": 15
             }
           },
           "thor": {

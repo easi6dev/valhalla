@@ -58,23 +58,20 @@ println(info["bounds"])    // {minLat=1.15, maxLat=1.48, ...}
 
 ```kotlin
 import global.tada.valhalla.config.SingaporeConfig
-import global.tada.valhalla.config.ThailandConfig
+import global.tada.valhalla.config.RegionConfigFactory
 
 // Check if a location is within Singapore
 val isSG = SingaporeConfig.bounds.isValidLocation(1.3, 103.8)
 println(isSG) // true
 
-// Check if a location is within Thailand
-val isTH = ThailandConfig.bounds.isValidLocation(13.7, 100.5)
-println(isTH) // true (Bangkok)
-
 // Get region center
 val sgCenter = SingaporeConfig.bounds.center()
 println("Singapore center: ${sgCenter.first}, ${sgCenter.second}")
 
-// Calculate region area
-val thArea = ThailandConfig.bounds.approximateArea()
-println("Thailand area: ${thArea} km²") // ~513,000 km²
+// For other regions, get bounds via RegionConfigFactory
+val thInfo = RegionConfigFactory.getRegionInfo("thailand")
+val thBounds = thInfo["bounds"] as Map<*, *>
+println("Thailand bounds: $thBounds") // {min_lat=5.5, max_lat=20.5, min_lon=97.5, max_lon=105.7}
 ```
 
 ### Custom Costing Profiles
@@ -227,7 +224,7 @@ Edit `RegionConfigFactory.kt`:
 fun getConfig(region: String): RegionConfig {
     return when (region.lowercase().trim()) {
         "singapore", "sg" -> SingaporeConfig
-        "thailand", "th" -> ThailandConfig
+        // "thailand", "th" -> ThailandConfig  // Example: add when ThailandConfig is created
         "malaysia", "my" -> MalaysiaConfig  // Add this line
         else -> throw IllegalArgumentException(
             "Unsupported region: '$region'. Supported regions: ${getSupportedRegions().joinToString(", ")}"
@@ -238,7 +235,7 @@ fun getConfig(region: String): RegionConfig {
 fun getSupportedRegions(): List<String> {
     return listOf(
         "singapore",
-        "thailand",
+        // "thailand",  // Add when ThailandConfig is created
         "malaysia"  // Add this line
     )
 }

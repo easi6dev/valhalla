@@ -1,49 +1,207 @@
-# Spring Boot Integration Example
+# Valhalla JNI — Setup & Integration Reference
 
-This example shows how to integrate Valhalla JNI into a Spring Boot microservice.
+**Project:** Valhalla V3 — Java/Kotlin JNI Bindings
+**Target Platform:** AWS ECS (Docker containers)
+**Last Updated:** 2026-03-09
 
-## Quick Start
+This folder is the canonical reference for building, configuring, and integrating the Valhalla JNI library.
 
-### 1. Add Dependency
+---
 
-**build.gradle.kts:**
+## Documents in This Folder
+
+| Document | Purpose |
+|----------|---------|
+| **README.md** *(this file)* | Overview, architecture, integration patterns, IDE setup |
+| **[BUILD_AND_RUN.md](BUILD_AND_RUN.md)** | Step-by-step build guide (tile generation, JNI compilation, running the test server) |
+| **[INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md)** | Integration patterns and ready-to-use code snippets |
+
+---
+
+## What This Is
+
+This repository produces **`valhalla-jni.jar`** — a self-contained library JAR that bundles the Valhalla C++ routing engine's native `.so` libraries. Drop it on the classpath of any JVM service and call the `Actor` API directly, in-process, with no network round-trip.
+
+### valhalla-server — test/reference service only
+
+The companion `valhalla-server` project is a **minimal Ktor HTTP wrapper used only for testing and verifying the JAR during development**. It is not intended for production use and must not be the integration point for other services.
+
+> **Production pattern:** your services add `valhalla-jni.jar` as a Gradle/Maven dependency and call `Actor` directly in-process. See [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md).
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  YOUR SERVICE  (production)                              │
+│  Adds valhalla-jni.jar as a dependency                   │
+│  Calls Actor API in-process — no network hop             │
+└──────────────────────┬───────────────────────────────────┘
+                       │  in-process JNI call
+┌──────────────────────▼───────────────────────────────────┐
+│  valhalla-jni.jar                                        │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │  Actor.kt  (Kotlin API)                             │ │
+│  │  RegionConfigFactory.kt  (tile path resolution)     │ │
+│  └──────────────────────┬──────────────────────────────┘ │
+│                         │  JNI                           │
+│  ┌──────────────────────▼──────────────────────────────┐ │
+│  │  libvalhalla_jni.so  (bundled inside JAR)           │ │
+│  │  libvalhalla.so.3    (bundled inside JAR)           │ │
+│  │  libprotobuf-lite.so.* (bundled inside JAR)         │ │
+│  └──────────────────────┬──────────────────────────────┘ │
+└─────────────────────────┼────────────────────────────────┘
+                          │  reads at startup
+┌─────────────────────────▼────────────────────────────────┐
+│  Routing Tiles  (mounted at runtime — NOT in JAR)        │
+│  /var/valhalla/tiles/singapore/  ← EFS in production     │
+│  data/valhalla_tiles/singapore/  ← local dev default     │
+└──────────────────────────────────────────────────────────┘
+
+   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+   valhalla-server  [TEST/REFERENCE ONLY — not for prod]
+   Thin Ktor HTTP wrapper used to smoke-test the JAR locally
+   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+```
+
+### Key components
+
+| Component | Language | Purpose |
+|-----------|----------|---------|
+| `Actor.kt` | Kotlin | Main public API — `route()`, `matrix()`, `isochrone()`, `locate()`, `status()` |
+| `RegionConfigFactory.kt` | Kotlin | Resolves tile directory from env var / system property / direct path |
+| `libvalhalla_jni.so` | C++ | JNI bridge — generated by CMake |
+| `libvalhalla.so.3` | C++ | Valhalla routing engine |
+| `libprotobuf-lite.so.*` | C++ | Protocol Buffers runtime |
+| `regions.json` | JSON | Master region config (bounds, OSM source, tile directory per region) |
+
+---
+
+## Repository Layout
+
+```
+valhalla/                          ← this repo (JNI library)
+├── config/
+│   └── regions/
+│       └── regions.json             ← master region config (single source of truth)
+├── data/
+│   ├── osm/                         ← downloaded OSM .pbf files (gitignored)
+│   └── valhalla_tiles/              ← built routing tiles (gitignored)
+│       └── singapore/
+├── docker/
+│   ├── Dockerfile.prod              ← production multi-stage Docker build
+│   ├── docker-compose.yml           ← reference compose config
+│   └── docker-compose.dev.yml       ← local/dev override
+├── scripts/
+│   └── regions/
+│       ├── download-region-osm.sh   ← Phase 1a: download OSM data
+│       ├── build-tiles.sh           ← Phase 1b: build routing tiles
+│       └── validate-tiles.sh        ← Phase 1c: validate tile output
+└── src/bindings/java/               ← Kotlin/JNI source
+    ├── build-jni-bindings.sh        ← Phase 2A: WSL/Linux JNI + JAR build
+    ├── bundle-production-jar.sh     ← production JAR optimisation
+    ├── build.gradle.kts
+    └── src/main/kotlin/global/tada/valhalla/
+        ├── Actor.kt                 ← main public API
+        ├── ValhallaException.kt
+        └── config/
+            ├── RegionConfigFactory.kt
+            └── RegionConfigValidator.kt
+
+valhalla-server/                     ← TEST/REFERENCE server only (separate repo)
+│                                       Used to verify JAR behaviour — NOT for production
+└── src/main/kotlin/.../server/
+    ├── Application.kt
+    ├── Routing.kt
+    └── Plugins.kt
+```
+
+---
+
+## Quick Start (summary)
+
+Full step-by-step instructions are in [BUILD_AND_RUN.md](BUILD_AND_RUN.md). The four phases in brief:
+
+| Phase | What it does | Run when |
+|-------|-------------|----------|
+| **Phase 1** — Tile Generation | Download OSM data; build `.gph` routing tiles | Once per region; tiles are portable |
+| **Phase 2** — Build JNI Library | Compile `libvalhalla_jni.so`; package `valhalla-jni.jar` | Once; or when C++ source changes |
+| **Phase 3** — Configure Tile Path | Set `VALHALLA_TILE_DIR` env var | At deployment/runtime |
+| **Phase 4** — Verify | Run `valhalla-server` (test only) or run the Gradle test suite | After Phase 2 to confirm the JAR works |
+
+**Check tiles first** — don't rebuild if they already exist:
+
+```bash
+wsl -d Ubuntu-22.04
+cd /mnt/c/Users/<YOUR_USERNAME>/Workspace/valhalla
+find data/valhalla_tiles/singapore -name "*.gph" | wc -l   # expect 700+
+```
+
+---
+
+## Integrating valhalla-jni.jar into Your Service
+
+> This is the production pattern. Do **not** run `valhalla-server` in production — that is a test utility only.
+
+### 1. Build and publish the JAR
+
+```bash
+cd src/bindings/java
+./gradlew publishToMavenLocal
+# Or publish to your org's Nexus/Artifactory:
+./gradlew publish
+```
+
+Published as:
+```
+groupId:    global.tada.valhalla
+artifactId: valhalla-jni
+version:    1.0.0-SNAPSHOT
+```
+
+### 2. Add the dependency
+
+**Gradle (Kotlin DSL):**
 ```kotlin
 dependencies {
-    implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("global.tada.valhalla:valhalla-jni:1.0.0-SNAPSHOT")
-    implementation("org.json:json:20240303")
 }
 ```
 
-### 2. Configuration
-
-**application.yml:**
-```yaml
-valhalla:
-  tile-dir: /data/valhalla_tiles/singapore
-  region: singapore
-
-server:
-  port: 8088
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,metrics
+**Maven:**
+```xml
+<dependency>
+    <groupId>global.tada.valhalla</groupId>
+    <artifactId>valhalla-jni</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+</dependency>
 ```
 
-### 3. Service Implementation
+### 3. Configure tile path
 
-**RoutingService.kt:**
+The JAR does not bundle tiles. Set `VALHALLA_TILE_DIR` at runtime (recommended):
+
+```bash
+export VALHALLA_TILE_DIR=/var/valhalla/tiles
+```
+
+Or via JVM property:
+```bash
+java -Dvalhalla.tile.dir=/var/valhalla/tiles -jar your-service.jar
+```
+
+`RegionConfigFactory` appends the region name automatically:
+`/var/valhalla/tiles` + `singapore` → `/var/valhalla/tiles/singapore/`
+
+### 4. Use the Actor API
+
 ```kotlin
-package com.tada.routing.service
-
 import global.tada.valhalla.Actor
+import jakarta.annotation.PostConstruct
+import jakarta.annotation.PreDestroy
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
-import javax.annotation.PostConstruct
-import javax.annotation.PreDestroy
 
 @Service
 class RoutingService(
@@ -53,281 +211,179 @@ class RoutingService(
 
     @PostConstruct
     fun init() {
+        // Singleton — one Actor per service, not per request
         actor = Actor.createSingapore(tileDir)
-        println("Valhalla Actor initialized with tiles from: $tileDir")
     }
 
-    fun calculateRoute(from: Location, to: Location, costing: String = "auto"): String {
-        val request = """
+    fun route(fromLat: Double, fromLon: Double, toLat: Double, toLon: Double): String {
+        return actor.route("""
         {
           "locations": [
-            {"lat": ${from.lat}, "lon": ${from.lon}},
-            {"lat": ${to.lat}, "lon": ${to.lon}}
+            {"lat": $fromLat, "lon": $fromLon},
+            {"lat": $toLat, "lon": $toLon}
           ],
-          "costing": "$costing",
+          "costing": "auto",
           "units": "kilometers"
         }
-        """
-        return actor.route(request)
+        """)
     }
 
-    fun calculateMatrix(source: Location, targets: List<Location>): String {
-        val targetsJson = targets.joinToString(",") {
-            """{"lat": ${it.lat}, "lon": ${it.lon}}"""
-        }
-
-        val request = """
-        {
-          "sources": [{"lat": ${source.lat}, "lon": ${source.lon}}],
-          "targets": [$targetsJson],
-          "costing": "auto"
-        }
-        """
-        return actor.matrix(request)
+    fun matrix(sources: List<Pair<Double, Double>>, targets: List<Pair<Double, Double>>): String {
+        val srcJson = sources.joinToString(",") { """{"lat":${it.first},"lon":${it.second}}""" }
+        val tgtJson = targets.joinToString(",") { """{"lat":${it.first},"lon":${it.second}}""" }
+        return actor.matrix("""{"sources":[$srcJson],"targets":[$tgtJson],"costing":"auto"}""")
     }
 
-    fun calculateIsochrone(location: Location, minutes: Int): String {
-        val request = """
+    fun isochrone(lat: Double, lon: Double, minutes: Int): String {
+        return actor.isochrone("""
         {
-          "locations": [{"lat": ${location.lat}, "lon": ${location.lon}}],
+          "locations": [{"lat": $lat, "lon": $lon}],
           "costing": "auto",
           "contours": [{"time": $minutes}],
           "polygons": true
         }
-        """
-        return actor.isochrone(request)
+        """)
     }
 
     @PreDestroy
-    fun cleanup() {
-        actor.close()
-    }
-}
-
-data class Location(val lat: Double, val lon: Double)
-```
-
-### 4. REST Controller
-
-**RoutingController.kt:**
-```kotlin
-package com.tada.routing.controller
-
-import com.tada.routing.service.Location
-import com.tada.routing.service.RoutingService
-import org.springframework.http.ResponseEntity
-import org.springframework.web.bind.annotation.*
-
-@RestController
-@RequestMapping("/api/v1/routing")
-class RoutingController(private val routingService: RoutingService) {
-
-    @PostMapping("/route")
-    fun calculateRoute(@RequestBody request: RouteRequest): ResponseEntity<String> {
-        val result = routingService.calculateRoute(
-            from = request.from,
-            to = request.to,
-            costing = request.costing ?: "auto"
-        )
-        return ResponseEntity.ok()
-            .header("Content-Type", "application/json")
-            .body(result)
-    }
-
-    @PostMapping("/matrix")
-    fun calculateMatrix(@RequestBody request: MatrixRequest): ResponseEntity<String> {
-        val result = routingService.calculateMatrix(
-            source = request.source,
-            targets = request.targets
-        )
-        return ResponseEntity.ok()
-            .header("Content-Type", "application/json")
-            .body(result)
-    }
-
-    @PostMapping("/isochrone")
-    fun calculateIsochrone(@RequestBody request: IsochroneRequest): ResponseEntity<String> {
-        val result = routingService.calculateIsochrone(
-            location = request.location,
-            minutes = request.minutes
-        )
-        return ResponseEntity.ok()
-            .header("Content-Type", "application/json")
-            .body(result)
-    }
-}
-
-data class RouteRequest(
-    val from: Location,
-    val to: Location,
-    val costing: String? = "auto"
-)
-
-data class MatrixRequest(
-    val source: Location,
-    val targets: List<Location>
-)
-
-data class IsochroneRequest(
-    val location: Location,
-    val minutes: Int
-)
-```
-
-### 5. Health Check
-
-**HealthController.kt:**
-```kotlin
-package com.tada.routing.controller
-
-import global.tada.valhalla.Actor
-import org.springframework.boot.actuate.health.Health
-import org.springframework.boot.actuate.health.HealthIndicator
-import org.springframework.stereotype.Component
-
-@Component
-class ValhallaHealthIndicator(private val actor: Actor) : HealthIndicator {
-
-    override fun health(): Health {
-        return try {
-            val status = actor.status("{}")
-            Health.up()
-                .withDetail("valhalla", "operational")
-                .withDetail("status", status)
-                .build()
-        } catch (e: Exception) {
-            Health.down()
-                .withDetail("valhalla", "unavailable")
-                .withException(e)
-                .build()
-        }
-    }
+    fun cleanup() { actor.close() }
 }
 ```
 
-### 6. Run Locally
+**Important:** The `Actor` is thread-safe. Create **one instance per service** (singleton). Do not create a new `Actor` per request — each instance loads tiles (~500 MB for Singapore).
+
+For more integration patterns (Java examples, multi-region, coroutines) see [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md).
+
+---
+
+## IDE Setup
+
+### IntelliJ IDEA (recommended)
+
+1. **Open the Java subproject:**
+   ```
+   File → Open → src/bindings/java → OK
+   ```
+2. **Wait for Gradle sync** (2–5 min — downloads dependencies)
+3. **Configure SDK:**
+   ```
+   File → Project Structure → Project → SDK: JDK 17+, Language level: 17
+   ```
+4. **Mark large directories as Excluded** (speeds up indexing):
+   - Right-click `data/` → Mark Directory as → Excluded
+   - Right-click `build/` → Mark Directory as → Excluded
+
+**Running tests in IntelliJ:**
+- Open `SingaporeRideHaulingTest.kt` → click ▶ next to the class name
+- Or via Gradle panel: `Tasks → verification → test`
+
+**Common issue — "Cannot resolve symbol":**
+```
+Build → Rebuild Project
+View → Tool Windows → Gradle → Reload All Gradle Projects
+```
+
+**Out of memory during build** — add to `gradle.properties`:
+```properties
+org.gradle.jvmargs=-Xmx4096m -Xms2048m
+```
+
+### VS Code
+
+1. Install extensions: **Extension Pack for Java**, **Kotlin Language**, **Gradle for Java**
+2. `File → Add Folder to Workspace → src/bindings/java`
+3. `Ctrl+Shift+P` → Gradle: Refresh Gradle Project
+4. Run tests via the Testing view (test tube icon)
+
+---
+
+## Environment Variable Reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VALHALLA_TILE_DIR` | `data/valhalla_tiles` | Path to routing tiles directory |
+| `VALHALLA_REGION` | `singapore` | Active region |
+| `VALHALLA_ENV` | `prod` | Environment name (`dev`, `uat`, `prod`) |
+| `PORT` | `8080` | HTTP server port (valhalla-server test utility only) |
+| `JAVA_OPTS` | `-Xmx2g -Xms512m -XX:+UseG1GC` | JVM heap and GC options |
+
+---
+
+## Resource Requirements
+
+| Environment | CPU | Memory | Disk (tiles) |
+|-------------|-----|--------|--------------|
+| Local / Dev | 2 cores | 2–4 GB | ~500 MB/region |
+| UAT | 2 vCPU | 6 GB | ~500 MB/region |
+| Production | 4 vCPU | 8 GB | ~500 MB/region |
+
+> Tile data (~500 MB for Singapore) is loaded into memory on Actor initialisation. Each `Actor` instance holds a separate memory-mapped tile set. Use the singleton pattern.
+
+---
+
+## Multi-Environment Deployment (ECS)
+
+Config, tile directory paths, and JVM tuning are injected at runtime via environment variables — never baked into the Docker image.
+
+| Concern | DEV | UAT | PROD |
+|---------|-----|-----|------|
+| `VALHALLA_ENV` | `dev` | `uat` | `prod` |
+| `VALHALLA_TILE_DIR` | `/var/valhalla/tiles` | `/var/valhalla/tiles` | `/var/valhalla/tiles` |
+| `JAVA_OPTS` | `-Xmx2g -Xms512m` | `-Xmx3g -Xms1g` | `-Xmx4g -Xms2g` |
+| ECS CPU | 1 vCPU | 2 vCPU | 4 vCPU |
+| ECS Memory | 3 GB | 6 GB | 8 GB |
+| Log level | DEBUG | INFO | WARN |
+| Deployment approval | Auto | 1 reviewer | 2 reviewers |
+
+Tiles are stored on AWS EFS (one mount per environment), updated on a weekly cron schedule independent of application deployments. See `docs/architecture/MULTI_ENV_DEPLOYMENT_STRATEGY.md` for full CI/CD and Terraform IaC details.
+
+---
+
+## Adding a New Region
+
+1. Add the region to `config/regions/regions.json` (set `osm_source`, `bounds`, `tile_dir`, `enabled: true`)
+2. Run the tile pipeline:
+   ```bash
+   ./scripts/regions/download-region-osm.sh thailand
+   ./scripts/regions/build-tiles.sh thailand --no-elevation
+   ./scripts/regions/validate-tiles.sh thailand
+   ```
+3. Create the Actor for the new region in your service:
+   ```kotlin
+   val actor = Actor.createForRegion("thailand", tileDir)
+   ```
+
+---
+
+## Run Tests
+
+After Phase 2, verify the JAR and tiles work without starting the server:
 
 ```bash
-# Make sure native libraries are in LD_LIBRARY_PATH
-export LD_LIBRARY_PATH=/path/to/valhalla/build/src:/path/to/valhalla/build/src/bindings/java/libs/native:$LD_LIBRARY_PATH
+cd src/bindings/java
 
-# Run the application
-./gradlew bootRun
+# Full Singapore test suite (11 ride-hailing scenarios)
+./gradlew test --tests "global.tada.valhalla.singapore.SingaporeRideHaulingTest"
+
+# All tests
+./gradlew test
+
+# Override tile path
+VALHALLA_TILE_DIR=/custom/path ./gradlew test
 ```
 
-### 7. Test the API
-
-```bash
-# Calculate route
-curl -X POST http://localhost:8088/api/v1/routing/route \
-  -H "Content-Type: application/json" \
-  -d '{
-    "from": {"lat": 1.2820, "lon": 103.8509},
-    "to": {"lat": 1.3521, "lon": 103.8198}
-  }'
-
-# Calculate driver matrix
-curl -X POST http://localhost:8088/api/v1/routing/matrix \
-  -H "Content-Type: application/json" \
-  -d '{
-    "source": {"lat": 1.3048, "lon": 103.8318},
-    "targets": [
-      {"lat": 1.3000, "lon": 103.8300},
-      {"lat": 1.3100, "lon": 103.8350},
-      {"lat": 1.3020, "lon": 103.8280}
-    ]
-  }'
-
-# Calculate isochrone
-curl -X POST http://localhost:8088/api/v1/routing/isochrone \
-  -H "Content-Type: application/json" \
-  -d '{
-    "location": {"lat": 1.2820, "lon": 103.8509},
-    "minutes": 15
-  }'
-
-# Health check
-curl http://localhost:8088/actuator/health
+Expected results:
 ```
-
-## Docker Deployment
-
-**Dockerfile:**
-
-```dockerfile
-FROM gradle:8.5-jdk17 AS builder
-WORKDIR /app
-COPY ../../../../../examples/spring-boot-integration .
-RUN gradle build -x test
-
-FROM openjdk:17-slim
-
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libboost-system1.74.0 \
-    libboost-filesystem1.74.0 \
-    libcurl4 \
-    libprotobuf23 \
-    libsqlite3-0 \
-    liblz4-1 \
-    zlib1g \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy native libraries
-COPY --from=valhalla-builder /valhalla/build/src/libvalhalla.so* /usr/local/lib/
-COPY --from=valhalla-builder /valhalla/build/src/bindings/java/libs/native/libvalhalla_jni.so /usr/local/lib/
-RUN ldconfig
-
-# Copy application
-COPY --from=builder /app/build/libs/*.jar /app/app.jar
-
-# Copy tile data
-COPY data/valhalla_tiles/singapore /data/valhalla_tiles/singapore
-
-WORKDIR /app
-EXPOSE 8088
-
-ENV JAVA_OPTS="-Xmx2g"
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+test 01 - Service Status                              PASSED   (~2ms)
+test 02 - Short Route (Raffles Place → Marina Bay)    PASSED   (~3ms)
+test 03 - Medium Route (Orchard Rd → East Coast)      PASSED   (~5ms)
+test 04 - Long Route (Marina Bay → Changi Airport)    PASSED   (~8ms)
+test 05 - Expressway Route (Jurong → Changi via PIE)  PASSED
+test 06 - Multi-Waypoint Route                        PASSED
+test 07 - Driver Dispatch Matrix (1×5)                PASSED
+test 08 - Motorcycle Routing                          PASSED
+test 09 - Isochrone (10/20/30 min zones)              PASSED
+test 10 - Location API (nearest road lookup)          PASSED
+test 11 - Performance (100 iterations)                PASSED
+BUILD SUCCESSFUL
 ```
-
-**docker-compose.yml:**
-```yaml
-version: '3.8'
-
-services:
-  routing-service:
-    build: .
-    ports:
-      - "8088:8088"
-    volumes:
-      - ./data/valhalla_tiles:/data/valhalla_tiles:ro
-    environment:
-      - SPRING_PROFILES_ACTIVE=production
-      - VALHALLA_TILE_DIR=/data/valhalla_tiles/singapore
-      - JAVA_OPTS=-Xmx2g
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8088/actuator/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-```
-
-## Performance Tips
-
-1. **Reuse Actor Instance**: Create one `Actor` instance per service (singleton pattern)
-2. **Memory**: Allocate at least 2GB heap for JVM (`-Xmx2g`)
-3. **Threads**: The Actor is thread-safe; you can call it concurrently
-4. **Caching**: Consider caching frequently requested routes in Redis
-5. **Monitoring**: Enable Spring Boot Actuator metrics
-
-## Production Considerations
-
-- Set up proper logging with structured logs
-- Add request/response logging middleware
-- Implement rate limiting
-- Add authentication/authorization
-- Set up monitoring and alerting
-- Use connection pooling for database (if storing routes)
-- Consider adding a CDN for tile data if serving multiple regions

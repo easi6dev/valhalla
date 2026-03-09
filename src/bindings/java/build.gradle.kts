@@ -97,6 +97,11 @@ tasks.test {
     // Parallel test execution
     maxParallelForks = Runtime.getRuntime().availableProcessors() / 2
 
+    // Run tests from the repo root so relative paths like config/regions/regions.json
+    // and data/valhalla_tiles/ resolve correctly.
+    // rootDir = .../valhallaV3/src/bindings/java  →  three parentFile calls reach valhallaV3/
+    workingDir = rootDir.parentFile.parentFile.parentFile
+
     // Native library path configuration
     systemProperty("java.library.path",
         "${layout.buildDirectory.get().asFile}/libs/native/Release:${System.getProperty("java.library.path")}")

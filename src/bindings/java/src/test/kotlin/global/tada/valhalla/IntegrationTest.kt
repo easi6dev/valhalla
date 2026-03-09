@@ -31,7 +31,7 @@ class IntegrationTest {
 
         // Step 1: Validate configuration
         val validation = RegionConfigValidator.validate(
-            regionsFile = "config/regions/regions-dev.json",
+            regionsFile = "config/regions/regions.json",
             validateTiles = false
         )
 
@@ -92,7 +92,7 @@ class IntegrationTest {
             // Check if region is supported
             val isSupported = RegionConfigFactory.isSupported(
                 region,
-                "config/regions/regions-dev.json"
+                "config/regions/regions.json"
             )
 
             assertTrue(isSupported, "Region $region should be supported")
@@ -100,7 +100,7 @@ class IntegrationTest {
             // Get region info
             val regionInfo = RegionConfigFactory.getRegionInfo(
                 region,
-                "config/regions/regions-dev.json"
+                "config/regions/regions.json"
             )
 
             logger.info("Region info for $region:")
@@ -152,7 +152,7 @@ class IntegrationTest {
 
         // Test valid configuration
         val validResult = RegionConfigValidator.validate(
-            regionsFile = "config/regions/regions-dev.json",
+            regionsFile = "config/regions/regions.json",
             validateTiles = false
         )
 
@@ -161,13 +161,12 @@ class IntegrationTest {
 
         assertFalse(validResult.hasErrors(), "Valid configuration should not have errors")
 
-        // Test invalid configuration (file not found)
-        assertThrows<IllegalArgumentException> {
-            RegionConfigValidator.validate(
-                regionsFile = "config/regions/non-existent.json",
-                validateTiles = false
-            )
-        }
+        // Test invalid configuration (file not found) — validate() returns errors, does not throw
+        val missingResult = RegionConfigValidator.validate(
+            regionsFile = "config/regions/non-existent.json",
+            validateTiles = false
+        )
+        assertTrue(missingResult.hasErrors(), "Missing config file should produce errors")
 
         logger.info("Configuration validation test passed")
     }
