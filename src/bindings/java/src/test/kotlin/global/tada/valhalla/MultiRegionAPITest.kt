@@ -14,16 +14,17 @@ class MultiRegionAPITest {
     fun `test RegionConfigFactory getSupportedRegions`() {
         val regions = RegionConfigFactory.getSupportedRegions()
         assertTrue(regions.contains("singapore"))
-        assertTrue(regions.contains("sg"))
+        // "sg" is a normalisation alias, not a stored key in regions.json
+        assertTrue(regions.contains("thailand"))
     }
 
     @Test
     fun `test RegionConfigFactory isSupported`() {
         assertTrue(RegionConfigFactory.isSupported("singapore"))
-        assertTrue(RegionConfigFactory.isSupported("sg"))
+        assertTrue(RegionConfigFactory.isSupported("sg"))   // alias → normalised to "singapore"
         assertTrue(RegionConfigFactory.isSupported("Singapore"))
         assertTrue(RegionConfigFactory.isSupported("SG"))
-        assertFalse(RegionConfigFactory.isSupported("thailand"))
+        assertTrue(RegionConfigFactory.isSupported("thailand"))  // present in regions.json (disabled but listed)
         assertFalse(RegionConfigFactory.isSupported("invalid"))
     }
 

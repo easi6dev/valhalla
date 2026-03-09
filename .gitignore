@@ -43,6 +43,14 @@ custom_files/
 !src/**/build/*.gradle
 *.gradle.kts.swp
 
+# Gradle build reports and generated files
+**/build/reports/
+**/build/test-results/
+**/build/jmh-results/
+**/build/distributions/
+**/build/libs/*.jar
+!**/build/libs/*-all.jar
+
 # Java bindings
 src/bindings/java/.gradle/
 src/bindings/java/build/
@@ -78,19 +86,32 @@ data/
 
 # Compiled native libraries (binaries should not be committed)
 *.so
+*.so.*
 *.dll
 *.dylib
 src/bindings/java/src/main/resources/lib/**/*.so
+src/bindings/java/src/main/resources/lib/**/*.so.*
 src/bindings/java/src/main/resources/lib/**/*.dll
 src/bindings/java/src/main/resources/lib/**/*.dylib
 
-# Gradle wrapper JAR (can be regenerated)
-src/bindings/java/gradle/wrapper/gradle-wrapper.jar
+# Gradle wrapper JAR
+# Note: gradle-wrapper.jar is allowed in src/bindings/java/.gitignore
+# It's a standard practice to commit it for reproducible builds
+gradle/wrapper/gradle-wrapper.jar
 
 # Test files (temporary)
 src/bindings/java/src/test/kotlin/global/tada/valhalla/MinimalTest.kt
 test-config.kt
 nul
+
+# JMH benchmark results
+**/jmh-result*.json
+**/jmh-result*.txt
+jmh-result.json
+
+# Load test results
+**/load-test-results/
+load-test-*.log
 
 # Claude Code temporary files
 .claude/test_status.ps1

@@ -21,8 +21,14 @@ Mjolnir handles the routing graph tiles and tile operations.
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | `tile_dir` | `data/valhalla_tiles/singapore` | Tile directory path - where routing graph tiles are stored |
-| `max_cache_size` | `1073741824` (1GB) | Max tile cache size in bytes - sufficient for Singapore's 450MB tiles |
-| `concurrency` | `4` | Parallel threads for tile operations - adjust based on CPU cores |
+| `max_cache_size` | `1073741824` (1GB) | Max tile cache size in bytes - sufficient for Singapore's tiles |
+| `max_concurrent_reader_users` | `4` | Max concurrent readers - adjust based on CPU cores |
+| `admin` | `data/admin_data/admins.sqlite` | Admin database for country/region boundaries |
+| `timezone` | `data/admin_data/timezones.sqlite` | Timezone database |
+| `tile_extract` | `data/valhalla_tiles/singapore.tar` | Tile extract archive (optional, for fast tile loading) |
+| `reclassify_links` | `true` | Reclassify link roads for better routing |
+| `shortcuts` | `true` | Enable shortcut edges for faster routing |
+| `hierarchy` | `true` | Enable hierarchical routing |
 
 ---
 
@@ -36,10 +42,15 @@ Loki is the location service that handles coordinate snapping and API routing.
 |--------|-------------|
 | `locate` | Snap GPS coordinates to nearest road |
 | `route` | Calculate A-to-B routes |
+| `height` | Elevation data for geometries |
 | `sources_to_targets` | Matrix API for driver dispatch (1 pickup to N drivers) |
 | `optimized_route` | TSP solver for multi-stop delivery optimization |
 | `isochrone` | Calculate reachable area within time/distance |
 | `trace_route` | Map-match GPS traces to roads |
+| `trace_attributes` | Detailed attributes along a route from GPS trace |
+| `transit_available` | Check transit stop availability around locations |
+| `expansion` | Road segments touched during routing |
+| `centroid` | Minimum cost meeting point calculation |
 | `status` | Health check endpoint |
 
 ### Service Defaults
@@ -53,9 +64,6 @@ Loki is the location service that handles coordinate snapping and API routing.
 | `street_side_tolerance` | `5` | Meters to prefer correct side of street (reduces U-turns at pickup/dropoff) |
 | `street_side_max_distance` | `1000` | Max distance to enforce street side matching (1km) |
 | `heading_tolerance` | `60` | Degrees of heading mismatch allowed (60° = flexible for GPS noise) |
-| `mvt_min_zoom_road_class` | `[9, 10, 11, 11, 12, 12, 13, 13]` | Mapbox Vector Tiles zoom levels per road class (for map display) |
-| `mvt_cache_min_zoom` | `0` | MVT tile cache minimum zoom level |
-| `mvt_cache_max_zoom` | `15` | MVT tile cache maximum zoom level |
 
 ---
 
@@ -199,7 +207,7 @@ Same limits as auto for taxi/ride-hailing vehicles.
 |-----------|-------|-------------|
 | `max_contours` | `4` | Max time contours to calculate (4 = e.g., 5min, 10min, 15min, 20min) |
 | `max_time_contour` | `120` | Max time contour in minutes (120min = 2 hour drive time) |
-| `max_distance` | `200000.0` | Max distance for isochrone (200km) |
+| `max_distance` | `25000.0` | Max distance for isochrone (25km) |
 | `max_locations` | `1` | Only 1 location per isochrone request (center point) |
 | `max_distance_contour` | `200` | Max distance contour in km (200km) |
 
@@ -213,8 +221,6 @@ Same limits as auto for taxi/ride-hailing vehicles.
 | `max_shape` | `16000` | Max GPS points in trace (16000 points = ~4 hours at 1 point/sec) |
 | `max_best_paths` | `4` | Max alternative paths to consider (4 alternatives) |
 | `max_best_paths_shape` | `100` | Max points for best path alternatives (100 points) |
-| `max_alternates` | `3` | Max alternate routes (3 alternatives) |
-| `max_alternates_shape` | `100` | Max points for alternate routes (100 points) |
 
 ### Skadi (Elevation Service)
 
@@ -293,20 +299,21 @@ For location validation:
 
 ## Usage in Code
 
-See `SingaporeConfig.kt` for programmatic access to these configurations:
+See `SingaporeConfig.kt` and `RegionConfigFactory.kt` for programmatic access to these configurations:
 
 ```kotlin
-// Build configuration
-val config = SingaporeConfig.buildConfig(
+// Build configuration (recommended)
+val config = RegionConfigFactory.buildConfig(
+    region = "singapore",
     tileDir = "data/valhalla_tiles/singapore",
     enableTraffic = false
 )
 
 // Validate location
-val isValid = SingaporeConfig.Bounds.isValidLocation(1.3521, 103.8198)
+val isValid = SingaporeConfig.bounds.isValidLocation(1.3521, 103.8198)
 
 // Get costing profiles
-val autoProfile = SingaporeConfig.Costing.autoProfile()
-val motorcycleProfile = SingaporeConfig.Costing.motorcycleProfile()
-val taxiProfile = SingaporeConfig.Costing.taxiProfile()
+val autoProfile = SingaporeConfig.autoProfile()
+val motorcycleProfile = SingaporeConfig.motorcycleProfile()
+val taxiProfile = SingaporeConfig.taxiProfile()
 ```

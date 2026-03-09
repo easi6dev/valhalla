@@ -47,6 +47,53 @@ class Actor(config: String) : AutoCloseable {
         @Volatile
         private var libraryLoaded = false
 
+        // Temp directory for extracted native libraries
+        // Uses process ID to prevent conflicts in multi-process environments
+        private val tempLibDir by lazy {
+            val processId = ProcessHandle.current().pid()
+            val tempDir = Files.createTempDirectory("valhalla-jni-$processId")
+
+            // Register shutdown hook to clean up temp directory
+            Runtime.getRuntime().addShutdownHook(Thread {
+                try {
+                    tempDir.toFile().deleteRecursively()
+                    logger.debug("Cleaned up temp library directory: {}", tempDir)
+                } catch (e: Exception) {
+                    logger.warn("Failed to clean up temp directory: {}", tempDir, e)
+                }
+            })
+
+            logger.debug("Created temp library directory: {}", tempDir)
+            tempDir
+        }
+
+        /**
+         * Essential native libraries that must be bundled with the JAR.
+         * System libraries (libz, libcurl, libssl, etc.) should be provided by the runtime environment.
+         *
+         * Production Deployment:
+         * - Docker: Install system libs in base image (apt install libboost, libprotobuf, etc.)
+         * - Kubernetes: Use init container or distroless image with required libraries
+         * - Bare Metal: Install system dependencies via package manager
+         *
+         * Only these libraries are bundled:
+         * 1. libprotobuf-lite - Specific version required by Valhalla
+         * 2. libvalhalla - Our core routing engine
+         * 3. libvalhalla_jni - JNI wrapper
+         */
+        private fun getRequiredLibraries(os: OperatingSystem, arch: String): List<String> {
+            return listOf(
+                // Protobuf Lite - bundled because Valhalla requires specific version
+                "lib/${os.identifier}-${arch}/libprotobuf-lite${os.suffix}.23",
+
+                // Valhalla core library
+                "lib/${os.identifier}-${arch}/libvalhalla${os.suffix}.3",
+
+                // JNI wrapper (must be last - depends on libvalhalla)
+                "lib/${os.identifier}-${arch}/lib${LIBRARY_NAME}${os.suffix}"
+            )
+        }
+
         /**
          * Loads the native library.
          *
@@ -68,98 +115,70 @@ class Actor(config: String) : AutoCloseable {
                                 "amd64",
                                 "x86_64" -> "amd64"
                                 "aarch64" -> "arm64"
-                                else -> throw ValhallaException("Unsupported operating system: $arch")
+                                else -> throw ValhallaException("Unsupported architecture: $arch")
                             }
 
-                            // copy the library files outside of jar
-                            // Load in dependency order: deepest dependencies first
-                            val libraryFiles = this::class.java.classLoader.let { classLoader ->
-                                listOfNotNull(
-                                    // Layer 1: Base system libraries (no dependencies on our libs)
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libffi${os.suffix}.8"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libresolv${os.suffix}.2"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libkeyutils${os.suffix}.1"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libtasn1${os.suffix}.6"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libcom_err${os.suffix}.2"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libz${os.suffix}.1"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/liblz4${os.suffix}.1"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libgmp${os.suffix}.10"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libunistring${os.suffix}.2"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libbrotlicommon${os.suffix}.1"),
+                            logger.info("Loading native libraries for {} {}", os.identifier, arch)
 
-                                    // Layer 2: Mid-level libraries (depend on Layer 1)
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libnettle${os.suffix}.8"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libhogweed${os.suffix}.6"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libp11-kit${os.suffix}.0"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libkrb5support${os.suffix}.0"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libk5crypto${os.suffix}.3"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libbrotlidec${os.suffix}.1"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libzstd${os.suffix}.1"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libidn2${os.suffix}.0"),
+                            // Get required library paths
+                            val requiredLibs = getRequiredLibraries(os, arch)
+                            val classLoader = this::class.java.classLoader
 
-                                    // Layer 3: Crypto and authentication libraries
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libgnutls${os.suffix}.30"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libkrb5${os.suffix}.3"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libcrypto${os.suffix}.3"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libssl${os.suffix}.3"),
+                            // Extract and load each library
+                            val loadedLibs = mutableListOf<String>()
+                            for (libPath in requiredLibs) {
+                                val resource = classLoader.getResource(libPath)
+                                    ?: throw ValhallaException("Native library not found in JAR: $libPath")
 
-                                    // Layer 4: Protocol libraries (depend on crypto)
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libsasl2${os.suffix}.2"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libgssapi_krb5${os.suffix}.2"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/liblber-2.5${os.suffix}.0"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libldap-2.5${os.suffix}.0"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libnghttp2${os.suffix}.14"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libpsl${os.suffix}.5"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libssh${os.suffix}.4"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/librtmp${os.suffix}.1"),
+                                val fileName = libPath.substringAfterLast('/')
+                                val targetFile = tempLibDir.resolve(fileName).toFile()
 
-                                    // Layer 5: High-level protocol libraries
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libprotobuf-lite${os.suffix}.23"),
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libcurl${os.suffix}.4"),
-
-                                    // Layer 6: Valhalla library (depends on protobuf, curl, etc.)
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/libvalhalla${os.suffix}.3"),
-
-                                    // Layer 7: JNI wrapper (depends on libvalhalla, MUST be last!)
-                                    classLoader.getResource("lib/${os.identifier}-${arch}/lib${LIBRARY_NAME}${os.suffix}"),
-                                )
-                            }
-
-                            println("Native libraries found in classpath: $libraryFiles")
-
-                            val targetDir = File(this::class.java.getProtectionDomain().codeSource.location.toURI().getPath())
-                                .parentFile.toPath()
-                            val files = libraryFiles.map { libraryFile ->
-                                println(libraryFile.file)
-                                println(libraryFile.file.split("/").last())
-                                val fileName = libraryFile.file.split("/").last()
-                                libraryFile.openStream().use { stream ->
-                                    val newFilePath = targetDir.resolve(fileName)
-                                    val newFile = if (newFilePath.exists()) {
-                                        File(newFilePath.toAbsolutePath().toString())
-                                    } else if (os.isPosix) {
-                                        val attr = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))
-                                        Files.createFile(newFilePath, attr).toFile()
-                                    } else {
-                                        val file = Files.createFile(newFilePath).toFile()
-                                        file.setReadable(true, true);
-                                        file.setWritable(true, true);
-                                        file.setExecutable(true, true);
-                                        file
-                                    }.also { it.deleteOnExit() }
-                                    FileOutputStream(newFile).use { newStream ->
-                                        newStream.write(stream.readBytes())
+                                // Extract library to temp directory
+                                resource.openStream().use { input ->
+                                    FileOutputStream(targetFile).use { output ->
+                                        input.copyTo(output)
                                     }
-                                    println("Copied ${libraryFile.file} tp ${newFile.absolutePath}")
-                                    newFile.absolutePath
                                 }
+
+                                // Set executable permissions on POSIX systems
+                                if (os.isPosix) {
+                                    targetFile.setReadable(true, true)
+                                    targetFile.setWritable(true, true)
+                                    targetFile.setExecutable(true, true)
+                                } else {
+                                    // Windows
+                                    targetFile.setReadable(true, true)
+                                    targetFile.setWritable(true, true)
+                                    targetFile.setExecutable(true, true)
+                                }
+
+                                // Load library using absolute path
+                                System.load(targetFile.absolutePath)
+                                loadedLibs.add(fileName)
+                                logger.debug("Loaded native library: {}", fileName)
                             }
 
-                            // load the valhalla_jni with absolute path
-                            files.forEach(System::load)
                             libraryLoaded = true
-                            logger.info("Successfully loaded native library: {}", LIBRARY_NAME)
+                            logger.info("Successfully loaded {} native libraries: {}", loadedLibs.size, loadedLibs)
                         } catch (e: UnsatisfiedLinkError) {
+                            val msg = """
+                                |Failed to load native library: $LIBRARY_NAME
+                                |
+                                |Common causes:
+                                |1. Missing system dependencies (libboost, libcurl, libssl, etc.)
+                                |   Solution: Install via package manager or use Docker
+                                |
+                                |2. Architecture mismatch (trying to load x86_64 on ARM)
+                                |   Solution: Build for correct architecture
+                                |
+                                |3. Missing libvalhalla.so in JAR
+                                |   Solution: Rebuild with: ./gradlew clean build
+                                |
+                                |Error: ${e.message}
+                            """.trimMargin()
+                            logger.error(msg, e)
+                            throw ValhallaException(msg, e)
+                        } catch (e: Exception) {
                             logger.error("Failed to load native library: {}", LIBRARY_NAME, e)
                             throw ValhallaException("Failed to load native library: $LIBRARY_NAME", e)
                         }
@@ -293,9 +312,13 @@ class Actor(config: String) : AutoCloseable {
     /**
      * Pointer to the native actor object.
      * Points to a C++ valhalla::tyr::actor_t instance.
+     *
+     * Marked volatile to ensure visibility across threads.
      */
+    @Volatile
     private var nativeHandle: Long = 0L
 
+    @Volatile
     private var closed = false
 
     init {

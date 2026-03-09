@@ -10,7 +10,7 @@
         "min_lon": 103.6,
         "max_lon": 104.0
       },
-      "tile_dir": "data/valhalla_tiles/singapore",
+      "tile_dir": "singapore",
       "default_costing": "auto",
       "supported_costings": ["auto", "bicycle", "pedestrian", "motorcycle", "bus", "truck", "taxi"],
       "costing_options": {
@@ -60,7 +60,7 @@
         "min_lon": 97.34,
         "max_lon": 105.64
       },
-      "tile_dir": "data/valhalla_tiles/thailand",
+      "tile_dir": "thailand",
       "default_costing": "auto",
       "supported_costings": ["auto", "bicycle", "pedestrian", "motorcycle", "bus", "truck"],
       "costing_options": {
@@ -95,7 +95,16 @@
   },
   "metadata": {
     "version": "1.0.0",
-    "last_updated": "2026-02-09",
-    "description": "Multi-region configuration for Valhalla routing engine with JNI bindings"
+    "last_updated": "2026-02-24",
+    "description": "Multi-region configuration for Valhalla routing engine with JNI bindings",
+    "tile_dir_config": {
+      "description": "Configure tile directory root via VALHALLA_TILE_DIR environment variable",
+      "default": "data/valhalla_tiles",
+      "examples": {
+        "development": "data/valhalla_tiles",
+        "production": "/var/valhalla/tiles",
+        "staging": "/var/valhalla/tiles"
+      }
+    }
   }
 }

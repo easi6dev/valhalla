@@ -56,8 +56,35 @@ object SingaporeConfig {
      * @param tileDir Path to Singapore tiles directory (default: data/valhalla_tiles/singapore)
      * @param enableTraffic Enable traffic-aware routing (default: false)
      * @return JSON configuration string
+     *
+     * @deprecated Use RegionConfigFactory.buildConfig("singapore", tileDir) instead
+     *             This method is retained for backward compatibility but now delegates to
+     *             RegionConfigFactory which loads config from regions.json
      */
+    @Deprecated(
+        message = "Use RegionConfigFactory.buildConfig(\"singapore\", tileDir) for centralized config management",
+        replaceWith = ReplaceWith(
+            "RegionConfigFactory.buildConfig(\"singapore\", tileDir, enableTraffic)",
+            "global.tada.valhalla.config.RegionConfigFactory"
+        )
+    )
     fun buildConfig(
+        tileDir: String,
+        enableTraffic: Boolean
+    ): String {
+        // Delegate to RegionConfigFactory for consistency
+        return try {
+            RegionConfigFactory.buildConfig("singapore", tileDir, enableTraffic)
+        } catch (e: Exception) {
+            // Fallback to legacy hardcoded config if regions.json not found
+            buildLegacyConfig(tileDir, enableTraffic)
+        }
+    }
+
+    /**
+     * Legacy hardcoded configuration (fallback only)
+     */
+    private fun buildLegacyConfig(
         tileDir: String,
         enableTraffic: Boolean
     ): String {
