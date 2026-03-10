@@ -141,7 +141,16 @@ cd /mnt/c/Users/<YOUR_USERNAME>/Workspace/valhalla
 
 ### Step 1.3 — Build Routing Tiles
 
+There are two ways to build tiles. Both produce identical output in `data/valhalla_tiles/singapore/`.
+
+---
+
+#### Option A — via `build-tiles.sh` (recommended for most cases)
+
+The script manages directory creation, config patching, Docker volume mounts, and log files automatically.
+
 ```bash
+# Tile output goes to VALHALLA_TILE_DIR/singapore (defaults to data/valhalla_tiles/singapore)
 ./scripts/regions/build-tiles.sh singapore --no-elevation
 ```
 
@@ -151,11 +160,97 @@ cd /mnt/c/Users/<YOUR_USERNAME>/Workspace/valhalla
 | `--no-elevation` | 15–20 min | Skip elevation — recommended for most use cases |
 | `--clean` | — | Delete existing tiles before rebuilding |
 
-When prompted `"Include elevation data? (y/N)"` → type `N` for faster builds.
+All paths are externally configurable via environment variables or flags — no hardcoded paths:
 
-- Builds tiles into `data/valhalla_tiles/singapore/`
-- Builds admin boundaries database into `data/admin_data/admins.sqlite`
-- Logs to `logs/tile-build-singapore-TIMESTAMP.log`
+```bash
+# Override tile output location (useful on CI, staging, or separate disk)
+VALHALLA_TILE_DIR=/mnt/data/tiles \
+OSM_DIR=/mnt/data/osm \
+VALHALLA_ADMIN_DIR=/mnt/data/admin \
+  ./scripts/regions/build-tiles.sh singapore --no-elevation
+
+# Or via CLI flags (same effect)
+./scripts/regions/build-tiles.sh singapore --no-elevation \
+  --tile-dir /mnt/data/tiles \
+  --osm-dir /mnt/data/osm \
+  --admin-dir /mnt/data/admin
+```
+
+The script:
+- Detects native `valhalla_build_tiles` if installed, otherwise falls back to Docker (`ghcr.io/valhalla/valhalla:latest`)
+- Builds tiles into `{VALHALLA_TILE_DIR}/singapore/`
+- Builds admin boundaries database into `{VALHALLA_ADMIN_DIR}/admins.sqlite`
+- Writes logs to `{VALHALLA_LOG_DIR}/tile-build-singapore-TIMESTAMP.log`
+
+---
+
+#### Option B — direct Docker invocation (when you want full manual control)
+
+Use this when you have a non-standard OSM file location, need to debug the build directly, or want to skip the script layer entirely.
+
+**Step B.1 — Prepare directories and patch the config:**
+
+```bash
+cd /mnt/c/Users/<YOUR_USERNAME>/Workspace/valhalla
+
+mkdir -p data/valhalla_tiles/singapore
+
+# Patch the Singapore config template with container-internal paths
+cat config/regions/singapore/valhalla-singapore.json \
+  | sed 's|"tile_dir": "data/valhalla_tiles/singapore"|"tile_dir": "/valhalla/tiles"|g' \
+  | sed 's|"admin": "data/admin_data/admins.sqlite"|"admin": "/valhalla/admin/admins.sqlite"|g' \
+  | sed 's|"timezone": "data/admin_data/timezones.sqlite"|"timezone": "/valhalla/admin/timezones.sqlite"|g' \
+  | sed 's|"tile_extract": "data/valhalla_tiles/singapore.tar"|"tile_extract": "/valhalla/tiles/singapore.tar"|g' \
+  | sed 's|"elevation": "data/valhalla_tiles/singapore"|"elevation": "/valhalla/tiles"|g' \
+  > /tmp/valhalla-sg-docker.json
+```
+
+**Step B.2 — Build tiles:**
+
+```bash
+# Mount four host directories into the container — no project root needed
+docker run --rm \
+  -v "$(pwd)/data/valhalla_tiles/singapore:/valhalla/tiles" \
+  -v "$(pwd)/data/admin_data:/valhalla/admin" \
+  -v "$(pwd)/data:/valhalla/osm" \
+  -v "/tmp:/valhalla/config" \
+  ghcr.io/valhalla/valhalla:latest \
+  valhalla_build_tiles \
+  -c /valhalla/config/valhalla-sg-docker.json \
+  /valhalla/osm/malaysia-singapore-brunei-latest.osm.pbf
+```
+
+> **Note:** The OSM file on disk is `malaysia-singapore-brunei-latest.osm.pbf` (covers SG+MY+BN — Singapore tiles are extracted automatically by the bounding box in the config). Adjust the filename if you downloaded a different extract.
+
+**Step B.3 — Build admin boundaries** *(optional — skip if `data/admin_data/admins.sqlite` already exists)*:
+
+```bash
+docker run --rm \
+  -v "$(pwd)/data/valhalla_tiles/singapore:/valhalla/tiles" \
+  -v "$(pwd)/data/admin_data:/valhalla/admin" \
+  -v "$(pwd)/data:/valhalla/osm" \
+  -v "/tmp:/valhalla/config" \
+  ghcr.io/valhalla/valhalla:latest \
+  valhalla_build_admins \
+  -c /valhalla/config/valhalla-sg-docker.json \
+  /valhalla/osm/malaysia-singapore-brunei-latest.osm.pbf
+```
+
+**Volume mount reference:**
+
+| Host path | Container path | Contents |
+|-----------|---------------|----------|
+| `data/valhalla_tiles/singapore/` | `/valhalla/tiles` | Tile output (`.gph` files) |
+| `data/admin_data/` | `/valhalla/admin` | Admin DB output (`admins.sqlite`) |
+| `data/` | `/valhalla/osm` | OSM `.pbf` input file |
+| `/tmp/` | `/valhalla/config` | Patched config JSON |
+
+**Expected output (last few lines):**
+
+```
+[INFO] valhalla_build_tiles: Finished with 735 tiles
+[INFO] valhalla_build_tiles: Time elapsed: 12m 34s
+```
 
 ---
 
@@ -617,12 +712,22 @@ BUILD SUCCESSFUL
 
 | Script | Location | Purpose | Run when |
 |--------|----------|---------|----------|
-| `download-region-osm.sh` | `scripts/regions/` | Downloads OSM map data (~230 MB) from Geofabrik | Tiles are missing |
-| `build-tiles.sh` | `scripts/regions/` | Converts OSM `.pbf` into Valhalla `.gph` routing tiles | Tiles are missing |
-| `validate-tiles.sh` | `scripts/regions/` | Checks tile count, size, hierarchy and file integrity | After tile build; verify existing tiles |
+| `download-region-osm.sh` | `scripts/regions/` | Downloads OSM map data (~230 MB) from Geofabrik. Supports `--osm-dir` / `OSM_DIR` env var | Tiles are missing |
+| `build-tiles.sh` | `scripts/regions/` | Converts OSM `.pbf` into Valhalla `.gph` routing tiles. Supports `--tile-dir`, `--osm-dir`, `--admin-dir`, `--log-dir` / env vars | Tiles are missing |
+| `validate-tiles.sh` | `scripts/regions/` | Checks tile count, size, hierarchy and file integrity. Supports `--tile-dir`, `--admin-dir` / env vars | After tile build; verify existing tiles |
 | `setup-valhalla.sh` | `scripts/regions/` | All-in-one: auto-installs + downloads + builds + tests | Fully automated setup on fresh machine |
 | `build-jni-bindings.sh` | `src/bindings/java/` | Compiles `libvalhalla_jni.so` via CMake + builds Gradle JAR | First setup or after C++ source changes |
 | `bundle-production-jar.sh` | `src/bindings/java/` | Assembles production JAR with all native libs bundled | Before deploying the JAR to a server |
+
+**Script environment variable reference:**
+
+| Variable | Used by | Default | Description |
+|----------|---------|---------|-------------|
+| `VALHALLA_TILE_DIR` | `build-tiles.sh`, `validate-tiles.sh` | `data/valhalla_tiles` | Root directory for tile output |
+| `OSM_DIR` | `download-region-osm.sh`, `build-tiles.sh` | `data/osm` | Directory containing OSM `.pbf` files |
+| `VALHALLA_ADMIN_DIR` | `build-tiles.sh`, `validate-tiles.sh` | `data/admin_data` | Directory for admin SQLite database |
+| `VALHALLA_LOG_DIR` | `build-tiles.sh` | `logs/` | Directory for build logs |
+| `VALHALLA_REGIONS_CONFIG` | all scripts | `config/regions/regions.json` | Path to regions config file |
 
 ### Quick cheatsheet
 
@@ -634,9 +739,34 @@ find scripts/ src/bindings/java -name "*.sh" | xargs sed -i 's/\r$//'
 find data/valhalla_tiles/singapore -name "*.gph" | wc -l   # expect 700+
 ./scripts/regions/validate-tiles.sh singapore
 
-# ── Phase 1: Build tiles from scratch ────────────────────────────────────────
-./scripts/regions/download-region-osm.sh singapore
-./scripts/regions/build-tiles.sh singapore --no-elevation
+# ── Phase 1A: Build tiles via script (handles everything automatically) ───────
+./scripts/regions/download-region-osm.sh singapore          # download OSM (~230 MB)
+./scripts/regions/build-tiles.sh singapore --no-elevation   # build tiles (~15-20 min)
+
+# ── Phase 1A: Build tiles with external paths (CI/staging/separate disk) ──────
+VALHALLA_TILE_DIR=/mnt/data/tiles \
+OSM_DIR=/mnt/data/osm \
+VALHALLA_ADMIN_DIR=/mnt/data/admin \
+  ./scripts/regions/build-tiles.sh singapore --no-elevation
+
+# ── Phase 1B: Build tiles via direct Docker (manual control / non-standard OSM file) ──
+mkdir -p data/valhalla_tiles/singapore
+cat config/regions/singapore/valhalla-singapore.json \
+  | sed 's|"tile_dir": "data/valhalla_tiles/singapore"|"tile_dir": "/valhalla/tiles"|g' \
+  | sed 's|"admin": "data/admin_data/admins.sqlite"|"admin": "/valhalla/admin/admins.sqlite"|g' \
+  | sed 's|"timezone": "data/admin_data/timezones.sqlite"|"timezone": "/valhalla/admin/timezones.sqlite"|g' \
+  | sed 's|"tile_extract": "data/valhalla_tiles/singapore.tar"|"tile_extract": "/valhalla/tiles/singapore.tar"|g' \
+  | sed 's|"elevation": "data/valhalla_tiles/singapore"|"elevation": "/valhalla/tiles"|g' \
+  > /tmp/valhalla-sg-docker.json
+docker run --rm \
+  -v "$(pwd)/data/valhalla_tiles/singapore:/valhalla/tiles" \
+  -v "$(pwd)/data/admin_data:/valhalla/admin" \
+  -v "$(pwd)/data:/valhalla/osm" \
+  -v "/tmp:/valhalla/config" \
+  ghcr.io/valhalla/valhalla:latest \
+  valhalla_build_tiles \
+  -c /valhalla/config/valhalla-sg-docker.json \
+  /valhalla/osm/malaysia-singapore-brunei-latest.osm.pbf
 
 # ── Phase 2A: Build JNI + JAR (WSL) ──────────────────────────────────────────
 cd src/bindings/java
