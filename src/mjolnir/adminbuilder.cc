@@ -6,6 +6,7 @@
 #include "mjolnir/sqlite3.h"
 
 #include <boost/geometry/algorithms/area.hpp>
+#include <boost/geometry/strategies/spherical/area.hpp>
 #include <boost/geometry/algorithms/covered_by.hpp>
 #include <boost/geometry/io/wkt/write.hpp>
 #include <boost/property_tree/ptree.hpp>
@@ -310,7 +311,7 @@ bg::multipolygon_ll_t to_multipolygon(const std::pair<std::string, uint64_t>& ad
   for (auto& outer : outers) {
     polygon_data pd{};
     pd.polygon.outer() = std::move(outer);
-    pd.area = boost::geometry::area(pd.polygon);
+    pd.area = boost::geometry::area(pd.polygon, boost::geometry::strategy::area::spherical<>());
     polys.emplace_back(std::move(pd));
   }
 
@@ -324,7 +325,7 @@ bg::multipolygon_ll_t to_multipolygon(const std::pair<std::string, uint64_t>& ad
   // additionally it seems like the second order enclaves that do still exists (NL and AE)
   // are mapped such that they are outers that live inside the inners (basically multipolygon)
   for (const auto& inner : inners) {
-    auto area = boost::geometry::area(inner);
+    auto area = boost::geometry::area(inner, boost::geometry::strategy::area::spherical<>());
     bool found = false;
     for (auto& poly : polys) {
       // is this the smallest polygon that can contain this inner?

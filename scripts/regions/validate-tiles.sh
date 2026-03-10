@@ -5,7 +5,20 @@
 #
 # Usage:
 #   ./validate-tiles.sh singapore
-#   ./validate-tiles.sh [region-name]
+#   ./validate-tiles.sh [region-name] [OPTIONS]
+#
+# Options:
+#   --tile-dir <path>    Root directory for tile output
+#                        (env: VALHALLA_TILE_DIR, default: <project-root>/data/valhalla_tiles)
+#   --admin-dir <path>   Directory containing admin SQLite database
+#                        (env: VALHALLA_ADMIN_DIR, default: <project-root>/data/admin_data)
+#   --config <path>      Path to regions.json config file
+#                        (env: VALHALLA_REGIONS_CONFIG)
+#
+# Environment variables:
+#   VALHALLA_TILE_DIR    Override tile root directory
+#   VALHALLA_ADMIN_DIR   Override admin database directory
+#   VALHALLA_REGIONS_CONFIG  Override regions config file path
 #
 
 set -e
@@ -20,7 +33,7 @@ NC='\033[0m'
 # Script paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-REGIONS_CONFIG="${PROJECT_ROOT}/config/regions/regions.json"
+REGIONS_CONFIG="${VALHALLA_REGIONS_CONFIG:-${PROJECT_ROOT}/config/regions/regions.json}"
 
 # Helper functions
 print_header() {
@@ -69,9 +82,8 @@ validate_tiles() {
     fi
 
     REGION_NAME=$(jq -r ".regions.${region}.name" "${REGIONS_CONFIG}")
-    TILE_DIR=$(jq -r ".regions.${region}.tile_dir" "${REGIONS_CONFIG}")
-    TILE_DIR_ROOT="${VALHALLA_TILE_DIR:-${PROJECT_ROOT}/data/valhalla_tiles}"
-    TILE_DIR="${TILE_DIR_ROOT}/${TILE_DIR}"
+    REGION_TILE_SUBDIR=$(jq -r ".regions.${region}.tile_dir" "${REGIONS_CONFIG}")
+    TILE_DIR="${TILE_DIR_ROOT}/${REGION_TILE_SUBDIR}"
 
     echo ""
     print_info "Region: ${REGION_NAME}"
@@ -131,14 +143,15 @@ validate_tiles() {
 
     # Test 5: Check admin data
     print_info "Test 5: Checking admin data..."
-    ADMIN_DB="${PROJECT_ROOT}/data/admin_data/admins.sqlite"
+    ADMIN_DB="${ADMIN_DIR}/admins.sqlite"
 
     if [[ -f "${ADMIN_DB}" ]]; then
         admin_size=$(du -h "${ADMIN_DB}" | cut -f1)
         print_success "Admin database found (${admin_size})"
     else
         print_warning "Admin database not found (optional)"
-        print_info "  Location: ${ADMIN_DB}"
+        print_info "  Expected: ${ADMIN_DB}"
+        print_info "  Set VALHALLA_ADMIN_DIR or use --admin-dir to override"
     fi
 
     # Test 6: Check region bounds
@@ -183,20 +196,27 @@ validate_tiles() {
     echo ""
     echo "1. Test with Java/Kotlin JNI:"
     echo "   cd src/bindings/java"
-    echo "   ./gradlew test --tests 'SingaporeRideHaulingTest'"
+    echo "   VALHALLA_TILE_DIR=${TILE_DIR_ROOT} ./gradlew test"
     echo ""
     echo "2. Or use valhalla_service (if installed):"
-    echo "   valhalla_service config/regions/singapore/valhalla-singapore.json"
+    echo "   VALHALLA_TILE_DIR=${TILE_DIR_ROOT} valhalla_service <config-file>"
     echo ""
 }
 
 # Show usage
 show_usage() {
-    echo "Usage: $0 <region-name>"
+    echo "Usage: $0 <region-name> [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --tile-dir <path>   Tile root directory (env: VALHALLA_TILE_DIR)"
+    echo "  --admin-dir <path>  Admin DB directory (env: VALHALLA_ADMIN_DIR)"
+    echo "  --config <path>     Regions config file (env: VALHALLA_REGIONS_CONFIG)"
+    echo "  -h, --help          Show this help"
     echo ""
     echo "Examples:"
     echo "  $0 singapore"
-    echo "  $0 thailand"
+    echo "  $0 thailand --tile-dir /mnt/tiles"
+    echo "  VALHALLA_TILE_DIR=/var/valhalla/tiles $0 singapore"
     echo ""
 }
 
@@ -208,6 +228,39 @@ main() {
     fi
 
     local region=$1
+    shift
+
+    # Defaults — env vars take priority, CLI flags override
+    TILE_DIR_ROOT="${VALHALLA_TILE_DIR:-${PROJECT_ROOT}/data/valhalla_tiles}"
+    ADMIN_DIR="${VALHALLA_ADMIN_DIR:-${PROJECT_ROOT}/data/admin_data}"
+
+    # Parse optional arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --tile-dir)
+                TILE_DIR_ROOT="$2"
+                shift 2
+                ;;
+            --admin-dir)
+                ADMIN_DIR="$2"
+                shift 2
+                ;;
+            --config)
+                REGIONS_CONFIG="$2"
+                shift 2
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+
     validate_tiles "${region}"
 }
 

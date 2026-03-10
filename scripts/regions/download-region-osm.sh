@@ -6,7 +6,18 @@
 # Usage:
 #   ./download-region-osm.sh singapore
 #   ./download-region-osm.sh thailand
-#   ./download-region-osm.sh [region-name]
+#   ./download-region-osm.sh [region-name] [OPTIONS]
+#
+# Options:
+#   --osm-dir <path>     Directory to store downloaded OSM files
+#                        (env: OSM_DIR, default: <project-root>/data/osm)
+#   --config <path>      Path to regions.json config file
+#                        (env: VALHALLA_REGIONS_CONFIG, default: <project-root>/config/regions/regions.json)
+#   -y, --yes            Skip re-download confirmation prompt
+#
+# Environment variables:
+#   OSM_DIR              Override OSM download directory
+#   VALHALLA_REGIONS_CONFIG  Override regions config file path
 #
 
 set -e
@@ -22,9 +33,12 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Configuration paths
-REGIONS_CONFIG="${PROJECT_ROOT}/config/regions/regions.json"
-DATA_DIR="${PROJECT_ROOT}/data/osm"
+# Configuration paths — env vars take priority, then CLI flags, then defaults
+REGIONS_CONFIG="${VALHALLA_REGIONS_CONFIG:-${PROJECT_ROOT}/config/regions/regions.json}"
+DATA_DIR="${OSM_DIR:-${PROJECT_ROOT}/data/osm}"
+
+# Flags
+AUTO_YES=false
 
 # Helper functions
 print_header() {
@@ -105,14 +119,17 @@ download_osm() {
     if [[ -f "${output_file}" ]]; then
         print_info "OSM file already exists: ${output_file}"
 
-        # Get file size and modification time
-        if [[ -f "${output_file}" ]]; then
-            file_size=$(du -h "${output_file}" | cut -f1)
-            file_date=$(date -r "${output_file}" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || stat -c %y "${output_file}" 2>/dev/null | cut -d' ' -f1-2)
-            print_info "Size: ${file_size}, Last modified: ${file_date}"
-        fi
+        file_size=$(du -h "${output_file}" | cut -f1)
+        file_date=$(date -r "${output_file}" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || stat -c %y "${output_file}" 2>/dev/null | cut -d' ' -f1-2)
+        print_info "Size: ${file_size}, Last modified: ${file_date}"
 
         echo ""
+        if [[ "${AUTO_YES}" == true ]]; then
+            print_info "Re-download skipped (--yes flag set)"
+            print_success "Using existing file"
+            return 0
+        fi
+
         read -p "Do you want to re-download? (y/N): " response
         if [[ ! "${response}" =~ ^[Yy]$ ]]; then
             print_success "Using existing file"
@@ -132,42 +149,42 @@ download_osm() {
     fi
     print_success "Internet connection OK"
 
-    # Download OSM data
+    # Download OSM data (use absolute -O path — no cd required)
     print_status "Downloading from Geofabrik..."
     print_info "This may take 5-30 minutes depending on region size and connection speed"
     echo ""
 
-    cd "${DATA_DIR}"
+    local md5_file="${DATA_DIR}/${region}-latest.osm.pbf.md5"
 
     if wget --progress=bar:force:noscroll \
            --continue \
            --tries=3 \
            --timeout=60 \
            --read-timeout=30 \
-           -O "${region}-latest.osm.pbf" \
+           -O "${output_file}" \
            "${OSM_SOURCE}"; then
         print_success "Download complete"
     else
         print_error "Download failed"
-        rm -f "${region}-latest.osm.pbf"
+        rm -f "${output_file}"
         exit 1
     fi
 
     # Download MD5 checksum
     print_status "Downloading MD5 checksum..."
-    if wget -q -O "${region}-latest.osm.pbf.md5" "${md5_url}" 2>/dev/null; then
+    if wget -q -O "${md5_file}" "${md5_url}" 2>/dev/null; then
 
         # Verify checksum
         print_status "Verifying file integrity..."
 
         if command -v md5sum &> /dev/null; then
             # Extract just the hash from the md5 file (format: hash  filename)
-            expected_md5=$(cut -d' ' -f1 "${region}-latest.osm.pbf.md5")
-            actual_md5=$(md5sum "${region}-latest.osm.pbf" | cut -d' ' -f1)
+            expected_md5=$(cut -d' ' -f1 "${md5_file}")
+            actual_md5=$(md5sum "${output_file}" | cut -d' ' -f1)
 
             if [[ "${expected_md5}" == "${actual_md5}" ]]; then
                 print_success "MD5 checksum verified"
-                rm -f "${region}-latest.osm.pbf.md5"
+                rm -f "${md5_file}"
             else
                 print_error "MD5 checksum verification failed!"
                 print_error "Expected: ${expected_md5}"
@@ -176,7 +193,7 @@ download_osm() {
             fi
         else
             print_info "md5sum not available, skipping verification"
-            rm -f "${region}-latest.osm.pbf.md5"
+            rm -f "${md5_file}"
         fi
     else
         print_info "MD5 file not available, skipping verification"
@@ -199,18 +216,25 @@ download_osm() {
 
 # Show usage
 show_usage() {
-    echo "Usage: $0 <region-name>"
+    echo "Usage: $0 <region-name> [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --osm-dir <path>   Directory to store OSM files (env: OSM_DIR)"
+    echo "  --config <path>    Path to regions.json (env: VALHALLA_REGIONS_CONFIG)"
+    echo "  -y, --yes          Skip re-download prompt"
+    echo "  -h, --help         Show this help"
     echo ""
     echo "Available regions from config:"
     if [[ -f "${REGIONS_CONFIG}" ]]; then
         jq -r '.regions | to_entries[] | "  \(.key) - \(.value.name) (\(if .value.enabled then "enabled" else "disabled" end))"' "${REGIONS_CONFIG}"
     else
-        echo "  (Config file not found)"
+        echo "  (Config file not found: ${REGIONS_CONFIG})"
     fi
     echo ""
     echo "Examples:"
     echo "  $0 singapore"
-    echo "  $0 thailand"
+    echo "  $0 thailand --osm-dir /data/osm"
+    echo "  OSM_DIR=/mnt/data/osm $0 singapore"
     echo ""
 }
 
@@ -225,6 +249,37 @@ main() {
     fi
 
     local region=$1
+    shift
+
+    # Parse optional arguments (region is already consumed above)
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --osm-dir)
+                DATA_DIR="$2"
+                shift 2
+                ;;
+            --config)
+                REGIONS_CONFIG="$2"
+                shift 2
+                ;;
+            -y|--yes)
+                AUTO_YES=true
+                shift
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+
+    print_info "OSM directory: ${DATA_DIR}"
+    print_info "Regions config: ${REGIONS_CONFIG}"
 
     # Check dependencies
     check_jq

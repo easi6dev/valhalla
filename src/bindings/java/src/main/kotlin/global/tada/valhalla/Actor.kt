@@ -2,13 +2,12 @@ package global.tada.valhalla
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.CompletableFuture
-import kotlin.io.path.exists
 
 /**
  * Main Actor class for Valhalla routing engine.
@@ -76,22 +75,73 @@ class Actor(config: String) : AutoCloseable {
          * - Kubernetes: Use init container or distroless image with required libraries
          * - Bare Metal: Install system dependencies via package manager
          *
-         * Only these libraries are bundled:
-         * 1. libprotobuf-lite - Specific version required by Valhalla
-         * 2. libvalhalla - Our core routing engine
-         * 3. libvalhalla_jni - JNI wrapper
+         * Bundled libraries per platform (load order is dependency order — must not be changed):
+         * Linux:   libprotobuf-lite.so.* → libvalhalla.so.* → libvalhalla_jni.so
+         * Windows: zlib1 → lz4 → libcurl → abseil_dll → libprotobuf-lite → valhalla_jni
+         * Mac:     libprotobuf-lite.dylib → libvalhalla.dylib → libvalhalla_jni.dylib
+         *
+         * Linux/Mac versions are resolved dynamically from JAR contents so the exact
+         * soname suffix (e.g. .23 vs .32) does not need to be hardcoded here.
          */
         private fun getRequiredLibraries(os: OperatingSystem, arch: String): List<String> {
-            return listOf(
-                // Protobuf Lite - bundled because Valhalla requires specific version
-                "lib/${os.identifier}-${arch}/libprotobuf-lite${os.suffix}.23",
+            val dir = "lib/${os.identifier}-${arch}"
+            return when (os) {
+                OperatingSystem.WINDOWS -> listOf(
+                    // Load order: lowest-level deps first, JNI wrapper last
+                    "$dir/zlib1.dll",
+                    "$dir/lz4.dll",
+                    "$dir/libcurl.dll",
+                    "$dir/abseil_dll.dll",
+                    "$dir/libprotobuf-lite.dll",
+                    "$dir/valhalla_jni.dll"
+                )
+                OperatingSystem.LINUX -> {
+                    // Resolve versioned sonames dynamically from JAR to avoid hardcoding
+                    // e.g. libprotobuf-lite.so.23 on Ubuntu 22, .so.32 on Ubuntu 24
+                    val classLoader = Actor::class.java.classLoader
+                    listOf(
+                        findVersionedLib(classLoader, dir, "libprotobuf-lite.so"),
+                        findVersionedLib(classLoader, dir, "libvalhalla.so"),
+                        "$dir/libvalhalla_jni.so"
+                    )
+                }
+                OperatingSystem.MAC -> listOf(
+                    "$dir/libprotobuf-lite.dylib",
+                    "$dir/libvalhalla.dylib",
+                    "$dir/libvalhalla_jni.dylib"
+                )
+            }
+        }
 
-                // Valhalla core library
-                "lib/${os.identifier}-${arch}/libvalhalla${os.suffix}.3",
-
-                // JNI wrapper (must be last - depends on libvalhalla)
-                "lib/${os.identifier}-${arch}/lib${LIBRARY_NAME}${os.suffix}"
-            )
+        /**
+         * Finds a versioned shared library inside the JAR by scanning the resource directory.
+         *
+         * For a [prefix] like "libprotobuf-lite.so" this will match both
+         * "libprotobuf-lite.so.23" (Ubuntu 22) and "libprotobuf-lite.so.32" (Ubuntu 24).
+         * Falls back to the exact prefix name if no versioned file is found.
+         *
+         * @param classLoader ClassLoader to use for resource scanning
+         * @param dir Resource directory path (e.g. "lib/linux-amd64")
+         * @param prefix Filename prefix to match (e.g. "libprotobuf-lite.so")
+         * @return Full resource path of the best match
+         */
+        private fun findVersionedLib(classLoader: ClassLoader, dir: String, prefix: String): String {
+            // The JAR resource listing is not directly enumerable via ClassLoader alone;
+            // we probe known versioned names in priority order and fall back to the bare prefix.
+            val candidates = when {
+                prefix.startsWith("libprotobuf-lite") -> listOf(
+                    "$dir/$prefix.32",  // Ubuntu 24.04 (protobuf 3.21+)
+                    "$dir/$prefix.23",  // Ubuntu 22.04
+                    "$dir/$prefix"
+                )
+                prefix.startsWith("libvalhalla.so") -> listOf(
+                    "$dir/$prefix.3",
+                    "$dir/$prefix"
+                )
+                else -> listOf("$dir/$prefix")
+            }
+            return candidates.firstOrNull { classLoader.getResource(it) != null }
+                ?: "$dir/$prefix"
         }
 
         /**
@@ -161,17 +211,27 @@ class Actor(config: String) : AutoCloseable {
                             libraryLoaded = true
                             logger.info("Successfully loaded {} native libraries: {}", loadedLibs.size, loadedLibs)
                         } catch (e: UnsatisfiedLinkError) {
+                            val osName = System.getProperty("os.name", "")
+                            val systemDepsHint = when {
+                                osName.contains("linux", ignoreCase = true) ->
+                                    "   apt-get install libboost-all-dev libcurl4 libssl3 libprotobuf-dev zlib1g liblz4-1"
+                                osName.contains("mac", ignoreCase = true) ->
+                                    "   brew install boost curl openssl protobuf lz4 zlib"
+                                else ->
+                                    "   Install: vcredist (MSVC runtime), libcurl, zlib, lz4, protobuf"
+                            }
                             val msg = """
                                 |Failed to load native library: $LIBRARY_NAME
                                 |
                                 |Common causes:
-                                |1. Missing system dependencies (libboost, libcurl, libssl, etc.)
-                                |   Solution: Install via package manager or use Docker
+                                |1. Missing system dependencies — install:
+                                |$systemDepsHint
+                                |   Or use the provided Docker image which includes all dependencies.
                                 |
-                                |2. Architecture mismatch (trying to load x86_64 on ARM)
-                                |   Solution: Build for correct architecture
+                                |2. Architecture mismatch (trying to load x86_64 library on ARM or vice versa)
+                                |   Solution: Ensure the JAR was built for this architecture
                                 |
-                                |3. Missing libvalhalla.so in JAR
+                                |3. Missing libvalhalla native library in JAR
                                 |   Solution: Rebuild with: ./gradlew clean build
                                 |
                                 |Error: ${e.message}
@@ -322,9 +382,43 @@ class Actor(config: String) : AutoCloseable {
     private var closed = false
 
     init {
+        validateTileDirectory(config)
         nativeHandle = nativeCreate(config)
         if (nativeHandle == 0L) {
             throw ValhallaException("Failed to create native actor")
+        }
+    }
+
+    /**
+     * Validates that the tile directory specified in the config exists before handing
+     * the config to the C++ actor. Fails fast with a clear message rather than letting
+     * the native layer emit an opaque error.
+     */
+    private fun validateTileDirectory(config: String) {
+        try {
+            val tileDir = JSONObject(config)
+                .optJSONObject("mjolnir")
+                ?.optString("tile_dir")
+                ?: return  // no tile_dir key — let native handle it
+
+            if (tileDir.isBlank()) return
+
+            val dir = File(tileDir)
+            if (!dir.exists()) {
+                throw ValhallaException(
+                    "Tile directory not found: $tileDir\n" +
+                    "Set VALHALLA_TILE_DIR environment variable to the directory containing region tile folders.\n" +
+                    "Expected structure: \$VALHALLA_TILE_DIR/{region}/0/, /1/, /2/"
+                )
+            }
+            if (!dir.isDirectory) {
+                throw ValhallaException("Tile path is not a directory: $tileDir")
+            }
+        } catch (e: ValhallaException) {
+            throw e
+        } catch (e: Exception) {
+            // JSON parse errors or other issues — let native report them
+            logger.debug("Could not pre-validate tile directory from config: {}", e.message)
         }
     }
 
