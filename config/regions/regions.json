@@ -12,7 +12,7 @@
       },
       "tile_dir": "singapore",
       "default_costing": "auto",
-      "supported_costings": ["auto", "bicycle", "pedestrian", "motorcycle", "bus", "truck", "taxi"],
+      "supported_costings": ["auto", "bicycle",  "motorcycle", "taxi"],
       "costing_options": {
         "auto": {
           "maneuver_penalty": 5,
@@ -34,16 +34,6 @@
           "use_highways": 1.0,
           "use_tolls": 1.0,
           "top_speed": 90
-        },
-        "truck": {
-          "maneuver_penalty": 15,
-          "height": 4.11,
-          "width": 2.6,
-          "length": 21.5,
-          "weight": 42.0,
-          "axle_load": 9.0,
-          "use_highways": 1.0,
-          "use_tolls": 1.0
         }
       },
       "timezone": "Asia/Singapore",

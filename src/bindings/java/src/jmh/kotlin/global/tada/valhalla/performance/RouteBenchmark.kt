@@ -48,7 +48,7 @@ open class RouteBenchmark {
             locations = listOf(marinaBay, woodlands),
             costing = "auto"
         )
-        actor.route(warmupRequest)
+        actor.route(warmupRequest.toJson())
     }
 
     @TearDown(Level.Trial)
