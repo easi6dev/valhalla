@@ -6,7 +6,28 @@
 # Usage:
 #   ./build-tiles.sh singapore
 #   ./build-tiles.sh thailand
-#   ./build-tiles.sh [region-name] [--clean]
+#   ./build-tiles.sh [region-name] [OPTIONS]
+#
+# Options:
+#   --tile-dir <path>    Root directory for tile output
+#                        (env: VALHALLA_TILE_DIR, default: <project-root>/data/valhalla_tiles)
+#   --osm-dir <path>     Directory containing OSM .pbf files
+#                        (env: OSM_DIR, default: <project-root>/data/osm)
+#   --admin-dir <path>   Directory for admin SQLite database output
+#                        (env: VALHALLA_ADMIN_DIR, default: <project-root>/data/admin_data)
+#   --log-dir <path>     Directory for build logs
+#                        (env: VALHALLA_LOG_DIR, default: <project-root>/logs)
+#   --config <path>      Path to regions.json config file
+#                        (env: VALHALLA_REGIONS_CONFIG)
+#   --clean              Remove existing tiles before building
+#   --no-elevation       Skip elevation processing (faster)
+#
+# Environment variables:
+#   VALHALLA_TILE_DIR    Override tile output root directory
+#   OSM_DIR              Override OSM input directory
+#   VALHALLA_ADMIN_DIR   Override admin database directory
+#   VALHALLA_LOG_DIR     Override log directory
+#   VALHALLA_REGIONS_CONFIG  Override regions config file path
 #
 
 set -e
@@ -22,10 +43,12 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Configuration
-REGIONS_CONFIG="${PROJECT_ROOT}/config/regions/regions.json"
-CONFIG_TEMPLATE="${PROJECT_ROOT}/config/regions/singapore/valhalla-singapore.json"
-LOG_DIR="${PROJECT_ROOT}/logs"
+# Configuration — env vars take priority, CLI flags override, then defaults
+REGIONS_CONFIG="${VALHALLA_REGIONS_CONFIG:-${PROJECT_ROOT}/config/regions/regions.json}"
+TILE_DIR_ROOT="${VALHALLA_TILE_DIR:-${PROJECT_ROOT}/data/valhalla_tiles}"
+OSM_DIR="${OSM_DIR:-${PROJECT_ROOT}/data/osm}"
+ADMIN_DIR="${VALHALLA_ADMIN_DIR:-${PROJECT_ROOT}/data/admin_data}"
+LOG_DIR="${VALHALLA_LOG_DIR:-${PROJECT_ROOT}/logs}"
 
 # Helper functions
 print_header() {
@@ -112,13 +135,38 @@ get_region_config() {
 
     # Extract region info
     REGION_NAME=$(jq -r ".regions.${region}.name" "${REGIONS_CONFIG}")
-    TILE_DIR=$(jq -r ".regions.${region}.tile_dir" "${REGIONS_CONFIG}")
-    TILE_DIR="${PROJECT_ROOT}/${TILE_DIR}"
-    OSM_FILE="${PROJECT_ROOT}/data/osm/${region}-latest.osm.pbf"
+    REGION_TILE_SUBDIR=$(jq -r ".regions.${region}.tile_dir" "${REGIONS_CONFIG}")
 
-    print_info "Region: ${REGION_NAME}"
+    # Tile output: TILE_DIR_ROOT (from env/flag) + region subdir from regions.json
+    TILE_DIR="${TILE_DIR_ROOT}/${REGION_TILE_SUBDIR}"
+
+    # OSM input: OSM_DIR (from env/flag) + standard filename
+    OSM_FILE="${OSM_DIR}/${region}-latest.osm.pbf"
+
+    # Config template: look for region-specific template, fall back to generic
+    local region_template="${PROJECT_ROOT}/config/regions/${region}/valhalla-${region}.json"
+    local generic_template="${PROJECT_ROOT}/config/regions/valhalla-template.json"
+    if [[ -f "${region_template}" ]]; then
+        CONFIG_TEMPLATE="${region_template}"
+    elif [[ -f "${generic_template}" ]]; then
+        CONFIG_TEMPLATE="${generic_template}"
+    else
+        # Fall back to first available template in config/regions/
+        CONFIG_TEMPLATE=$(find "${PROJECT_ROOT}/config/regions" -name "valhalla-*.json" | head -1)
+        if [[ -z "${CONFIG_TEMPLATE}" ]]; then
+            print_error "No Valhalla config template found in ${PROJECT_ROOT}/config/regions/"
+            print_error "Expected: ${region_template}"
+            exit 1
+        fi
+        print_info "No region-specific template found; using: ${CONFIG_TEMPLATE}"
+    fi
+
+    print_info "Region:         ${REGION_NAME}"
     print_info "Tile directory: ${TILE_DIR}"
-    print_info "OSM file: ${OSM_FILE}"
+    print_info "OSM file:       ${OSM_FILE}"
+    print_info "Config template: ${CONFIG_TEMPLATE}"
+    print_info "Admin dir:      ${ADMIN_DIR}"
+    print_info "Log dir:        ${LOG_DIR}"
 }
 
 # Build tiles
@@ -132,6 +180,7 @@ build_tiles() {
     # Create directories
     mkdir -p "${LOG_DIR}"
     mkdir -p "${TILE_DIR}"
+    mkdir -p "${ADMIN_DIR}"
     BUILD_LOG="${LOG_DIR}/tile-build-${region}-$(date +%Y%m%d-%H%M%S).log"
 
     # Verify OSM file exists
@@ -172,20 +221,25 @@ build_tiles() {
 
     # Create build config from template
     print_status "Creating build configuration..."
-    TEMP_CONFIG="${PROJECT_ROOT}/data/valhalla-build-${region}.json"
+    # Write temp config to log dir (guaranteed writable, outside project tree)
+    TEMP_CONFIG="${LOG_DIR}/valhalla-build-${region}-$(date +%Y%m%d-%H%M%S).json"
 
-    # Copy template and update paths
+    # Copy template and substitute all path placeholders with resolved absolute paths
     cp "${CONFIG_TEMPLATE}" "${TEMP_CONFIG}"
 
     # Use sed to update paths (works on both Linux and macOS)
+    # Replace tile_dir value (any path ending in the region subdir or generic placeholder)
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS
-        sed -i '' "s|data/valhalla_tiles/singapore|${TILE_DIR}|g" "${TEMP_CONFIG}"
-        sed -i '' "s|data/admin_data|${PROJECT_ROOT}/data/admin_data|g" "${TEMP_CONFIG}"
+        # macOS requires empty string after -i
+        sed -i '' "s|\"tile_dir\":.*|\"tile_dir\": \"${TILE_DIR}\",|g" "${TEMP_CONFIG}"
+        sed -i '' "s|data/admin_data|${ADMIN_DIR}|g" "${TEMP_CONFIG}"
+        # Replace any remaining PROJECT_ROOT-relative paths
+        sed -i '' "s|${PROJECT_ROOT}/data/valhalla_tiles[^\"]*|${TILE_DIR}|g" "${TEMP_CONFIG}"
     else
-        # Linux/Windows Git Bash
-        sed -i "s|data/valhalla_tiles/singapore|${TILE_DIR}|g" "${TEMP_CONFIG}"
-        sed -i "s|data/admin_data|${PROJECT_ROOT}/data/admin_data|g" "${TEMP_CONFIG}"
+        # Linux / Windows Git Bash
+        sed -i "s|\"tile_dir\":.*|\"tile_dir\": \"${TILE_DIR}\",|g" "${TEMP_CONFIG}"
+        sed -i "s|data/admin_data|${ADMIN_DIR}|g" "${TEMP_CONFIG}"
+        sed -i "s|${PROJECT_ROOT}/data/valhalla_tiles[^\"]*|${TILE_DIR}|g" "${TEMP_CONFIG}"
     fi
 
     # Remove elevation section if --no-elevation is specified
@@ -229,40 +283,56 @@ build_tiles() {
 
     # Execute valhalla_build_tiles (native or Docker)
     if [[ "${USE_DOCKER}" == true ]]; then
-        # For Docker, we need to adjust paths in the config file
-        DOCKER_CONFIG="${PROJECT_ROOT}/data/valhalla-build-${region}-docker.json"
+        # Docker strategy: mount three separate host directories into the container
+        #   /valhalla/tiles  ← TILE_DIR
+        #   /valhalla/osm    ← OSM_DIR
+        #   /valhalla/admin  ← ADMIN_DIR
+        #   /valhalla/config ← directory containing TEMP_CONFIG
+        TEMP_CONFIG_DIR="$(dirname "${TEMP_CONFIG}")"
 
-        # Convert all paths to Docker mount paths (/data instead of actual paths)
-        sed "s|${PROJECT_ROOT}|/data|g" "${TEMP_CONFIG}" > "${DOCKER_CONFIG}"
+        # Build a Docker-internal version of the config with /valhalla/* paths
+        DOCKER_CONFIG="${TEMP_CONFIG_DIR}/valhalla-build-${region}-docker.json"
+        sed \
+            -e "s|${TILE_DIR}|/valhalla/tiles|g" \
+            -e "s|${ADMIN_DIR}|/valhalla/admin|g" \
+            -e "s|${OSM_DIR}|/valhalla/osm|g" \
+            "${TEMP_CONFIG}" > "${DOCKER_CONFIG}"
 
         print_info "Docker config: ${DOCKER_CONFIG}"
 
-        # Prepare Docker volume mount path based on platform
-        DOCKER_MOUNT_PATH="${PROJECT_ROOT}"
+        # Resolve host paths for -v mounts (Windows Git Bash needs cygpath)
+        resolve_docker_path() {
+            if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname -s)" == CYGWIN* ]]; then
+                cygpath -w "$1" 2>/dev/null || echo "$1"
+            else
+                echo "$1"
+            fi
+        }
 
-        # On Windows (Git Bash/MSYS), convert path and use MSYS_NO_PATHCONV
+        DOCKER_TILE_PATH=$(resolve_docker_path "${TILE_DIR}")
+        DOCKER_OSM_PATH=$(resolve_docker_path "${OSM_DIR}")
+        DOCKER_ADMIN_PATH=$(resolve_docker_path "${ADMIN_DIR}")
+        DOCKER_CFG_PATH=$(resolve_docker_path "${TEMP_CONFIG_DIR}")
+
+        DOCKER_RUN_CMD=(docker run --rm
+            -v "${DOCKER_TILE_PATH}:/valhalla/tiles"
+            -v "${DOCKER_OSM_PATH}:/valhalla/osm"
+            -v "${DOCKER_ADMIN_PATH}:/valhalla/admin"
+            -v "${DOCKER_CFG_PATH}:/valhalla/config"
+            ghcr.io/valhalla/valhalla:latest
+            valhalla_build_tiles
+            -c "/valhalla/config/$(basename "${DOCKER_CONFIG}")"
+            "/valhalla/osm/${region}-latest.osm.pbf"
+        )
+
         if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname -s)" == CYGWIN* ]]; then
-            # Convert to Windows path (C:/Users/... format)
-            DOCKER_MOUNT_PATH=$(cygpath -w "${PROJECT_ROOT}" 2>/dev/null || echo "${PROJECT_ROOT}")
-            # Use MSYS_NO_PATHCONV to prevent Git Bash from mangling paths
-            if MSYS_NO_PATHCONV=1 docker run --rm \
-                -v "${DOCKER_MOUNT_PATH}:/data" \
-                ghcr.io/valhalla/valhalla:latest \
-                valhalla_build_tiles \
-                -c "/data/data/valhalla-build-${region}-docker.json" \
-                "/data/data/osm/${region}-latest.osm.pbf" 2>&1 | tee -a "${BUILD_LOG}"; then
+            if MSYS_NO_PATHCONV=1 "${DOCKER_RUN_CMD[@]}" 2>&1 | tee -a "${BUILD_LOG}"; then
                 BUILD_SUCCESS=true
             else
                 BUILD_SUCCESS=false
             fi
         else
-            # Linux and macOS use paths as-is
-            if docker run --rm \
-                -v "${DOCKER_MOUNT_PATH}:/data" \
-                ghcr.io/valhalla/valhalla:latest \
-                valhalla_build_tiles \
-                -c "/data/data/valhalla-build-${region}-docker.json" \
-                "/data/data/osm/${region}-latest.osm.pbf" 2>&1 | tee -a "${BUILD_LOG}"; then
+            if "${DOCKER_RUN_CMD[@]}" 2>&1 | tee -a "${BUILD_LOG}"; then
                 BUILD_SUCCESS=true
             else
                 BUILD_SUCCESS=false
@@ -312,32 +382,36 @@ build_tiles() {
         if [[ "${USE_DOCKER}" == true ]] || command -v valhalla_build_admins &> /dev/null; then
             echo ""
             print_status "Building administrative boundaries..."
-            mkdir -p "${PROJECT_ROOT}/data/admin_data"
+            # ADMIN_DIR already created at start of build_tiles
 
             if [[ "${USE_DOCKER}" == true ]]; then
-                # Create Docker config for admin build
-                DOCKER_ADMIN_CONFIG="${PROJECT_ROOT}/data/valhalla-admin-${region}-docker.json"
-                sed "s|${PROJECT_ROOT}|/data|g" "${TEMP_CONFIG}" > "${DOCKER_ADMIN_CONFIG}"
+                # Reuse the same Docker-internal paths as tile build
+                DOCKER_ADMIN_CONFIG="${TEMP_CONFIG_DIR}/valhalla-admin-${region}-docker.json"
+                sed \
+                    -e "s|${TILE_DIR}|/valhalla/tiles|g" \
+                    -e "s|${ADMIN_DIR}|/valhalla/admin|g" \
+                    -e "s|${OSM_DIR}|/valhalla/osm|g" \
+                    "${TEMP_CONFIG}" > "${DOCKER_ADMIN_CONFIG}"
 
-                # Windows/Linux specific Docker execution
+                DOCKER_ADMIN_RUN_CMD=(docker run --rm
+                    -v "${DOCKER_TILE_PATH}:/valhalla/tiles"
+                    -v "${DOCKER_OSM_PATH}:/valhalla/osm"
+                    -v "${DOCKER_ADMIN_PATH}:/valhalla/admin"
+                    -v "${DOCKER_CFG_PATH}:/valhalla/config"
+                    ghcr.io/valhalla/valhalla:latest
+                    valhalla_build_admins
+                    -c "/valhalla/config/$(basename "${DOCKER_ADMIN_CONFIG}")"
+                    "/valhalla/osm/${region}-latest.osm.pbf"
+                )
+
                 if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname -s)" == CYGWIN* ]]; then
-                    if MSYS_NO_PATHCONV=1 docker run --rm \
-                        -v "${DOCKER_MOUNT_PATH}:/data" \
-                        ghcr.io/valhalla/valhalla:latest \
-                        valhalla_build_admins \
-                        -c "/data/data/valhalla-admin-${region}-docker.json" \
-                        "/data/data/osm/${region}-latest.osm.pbf" 2>&1 | tee -a "${BUILD_LOG}"; then
+                    if MSYS_NO_PATHCONV=1 "${DOCKER_ADMIN_RUN_CMD[@]}" 2>&1 | tee -a "${BUILD_LOG}"; then
                         print_success "Admin boundaries built"
                     else
                         print_info "Admin boundaries build failed (non-critical)"
                     fi
                 else
-                    if docker run --rm \
-                        -v "${DOCKER_MOUNT_PATH}:/data" \
-                        ghcr.io/valhalla/valhalla:latest \
-                        valhalla_build_admins \
-                        -c "/data/data/valhalla-admin-${region}-docker.json" \
-                        "/data/data/osm/${region}-latest.osm.pbf" 2>&1 | tee -a "${BUILD_LOG}"; then
+                    if "${DOCKER_ADMIN_RUN_CMD[@]}" 2>&1 | tee -a "${BUILD_LOG}"; then
                         print_success "Admin boundaries built"
                     else
                         print_info "Admin boundaries build failed (non-critical)"
@@ -387,8 +461,14 @@ show_usage() {
     echo "Usage: $0 <region-name> [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --clean         Remove existing tiles before building"
-    echo "  --no-elevation  Skip elevation processing (faster, recommended for production)"
+    echo "  --tile-dir <path>    Tile output root directory (env: VALHALLA_TILE_DIR)"
+    echo "  --osm-dir <path>     OSM input directory (env: OSM_DIR)"
+    echo "  --admin-dir <path>   Admin DB output directory (env: VALHALLA_ADMIN_DIR)"
+    echo "  --log-dir <path>     Log directory (env: VALHALLA_LOG_DIR)"
+    echo "  --config <path>      Regions config file (env: VALHALLA_REGIONS_CONFIG)"
+    echo "  --clean              Remove existing tiles before building"
+    echo "  --no-elevation       Skip elevation processing (faster)"
+    echo "  -h, --help           Show this help"
     echo ""
     echo "Available regions:"
     if [[ -f "${REGIONS_CONFIG}" ]]; then
@@ -397,10 +477,9 @@ show_usage() {
     echo ""
     echo "Examples:"
     echo "  $0 singapore"
-    echo "  $0 singapore --clean"
-    echo "  $0 singapore --no-elevation"
     echo "  $0 singapore --clean --no-elevation"
-    echo "  $0 thailand"
+    echo "  $0 thailand --tile-dir /mnt/tiles --osm-dir /mnt/osm"
+    echo "  VALHALLA_TILE_DIR=/var/valhalla/tiles OSM_DIR=/data/osm $0 singapore"
     echo ""
 }
 
@@ -422,6 +501,26 @@ main() {
     shift
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --tile-dir)
+                TILE_DIR_ROOT="$2"
+                shift 2
+                ;;
+            --osm-dir)
+                OSM_DIR="$2"
+                shift 2
+                ;;
+            --admin-dir)
+                ADMIN_DIR="$2"
+                shift 2
+                ;;
+            --log-dir)
+                LOG_DIR="$2"
+                shift 2
+                ;;
+            --config)
+                REGIONS_CONFIG="$2"
+                shift 2
+                ;;
             --clean)
                 clean_build=true
                 shift
@@ -429,6 +528,10 @@ main() {
             --no-elevation)
                 skip_elevation=true
                 shift
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
                 ;;
             *)
                 print_error "Unknown option: $1"
@@ -438,10 +541,16 @@ main() {
         esac
     done
 
+    print_info "Tile dir root: ${TILE_DIR_ROOT}"
+    print_info "OSM dir:       ${OSM_DIR}"
+    print_info "Admin dir:     ${ADMIN_DIR}"
+    print_info "Log dir:       ${LOG_DIR}"
+    print_info "Regions config: ${REGIONS_CONFIG}"
+
     # Check dependencies
     check_dependencies
 
-    # Get region config
+    # Get region config (also resolves TILE_DIR, OSM_FILE, CONFIG_TEMPLATE)
     get_region_config "${region}"
 
     # Build tiles
