@@ -362,7 +362,7 @@ build_tiles() {
             -v "${DOCKER_OSM_PATH}:/valhalla/osm"
             -v "${DOCKER_ADMIN_PATH}:/valhalla/admin"
             -v "${DOCKER_CFG_PATH}:/valhalla/config"
-            ghcr.io/valhalla/valhalla:latest
+            "${docker_image}"
             valhalla_build_tiles
             -c "/valhalla/config/$(basename "${DOCKER_CONFIG}")"
             "/valhalla/osm/${region}-latest.osm.pbf"
@@ -441,7 +441,7 @@ build_tiles() {
                     -v "${DOCKER_OSM_PATH}:/valhalla/osm"
                     -v "${DOCKER_ADMIN_PATH}:/valhalla/admin"
                     -v "${DOCKER_CFG_PATH}:/valhalla/config"
-                    ghcr.io/valhalla/valhalla:latest
+                    "${docker_image}"
                     valhalla_build_admins
                     -c "/valhalla/config/$(basename "${DOCKER_ADMIN_CONFIG}")"
                     "/valhalla/osm/${region}-latest.osm.pbf"

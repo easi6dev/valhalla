@@ -29,7 +29,7 @@ set -euo pipefail
 # Resolve canonical paths — works regardless of where the script is invoked from
 # -----------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 JNI_DIR="${REPO_ROOT}/src/bindings/java"
 RESOURCES_LINUX="${JNI_DIR}/src/main/resources/lib/linux-amd64"
 LOG_DIR="${REPO_ROOT}/logs"

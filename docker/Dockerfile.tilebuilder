@@ -1,0 +1,126 @@
+# =============================================================================
+# Valhalla Tile Builder Image
+# =============================================================================
+# Builds valhalla_build_tiles and valhalla_build_admins from source so that
+# local changes (e.g. adminbuilder.cc fix) are compiled in.
+#
+# Based on Ubuntu 22.04 — matches the libprotobuf-lite.so.23 version bundled
+# in the JNI JAR resources.
+#
+# Usage:
+#   # Local dev build
+#   docker build -f docker/Dockerfile.tilebuilder -t valhalla-tilebuilder:local .
+#
+#   # Build and push to GHCR
+#   ./scripts/build-tilebuilder-image.sh --push --registry ghcr.io/YOUR_ORG
+#
+# The produced image is used by the tile pipeline (run-tile-pipeline.sh) as a
+# drop-in replacement for ghcr.io/valhalla/valhalla:latest.
+# Set VALHALLA_DOCKER_IMAGE in your pipeline.*.conf to point to this image.
+# =============================================================================
+
+# =============================================================================
+# Stage 1: Builder
+# =============================================================================
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+# Ubuntu 22.04: GCC 11 default, protobuf 3.12 → libprotobuf-lite.so.23
+RUN apt-get update && apt-get install -y \
+    # Build toolchain
+    gcc g++ cmake make pkg-config ccache \
+    # Valhalla core dependencies
+    libboost-all-dev \
+    libcurl4-openssl-dev \
+    libprotobuf-dev protobuf-compiler \
+    libsqlite3-dev libspatialite-dev libsqlite3-mod-spatialite \
+    liblz4-dev \
+    libgeos-dev libgeos++-dev \
+    liblua5.3-dev libluajit-5.1-dev \
+    libzmq3-dev libczmq-dev \
+    zlib1g-dev \
+    # Utilities
+    git curl wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy only what is needed to compile the C++ tile tools.
+# Structured for layer caching: deps that rarely change come first.
+COPY CMakeLists.txt libvalhalla.pc.in ./
+COPY cmake/           cmake/
+COPY third_party/     third_party/
+COPY proto/           proto/
+COPY valhalla/        valhalla/
+COPY src/             src/
+
+# Build — tile tools only, no Python bindings, no tests, no JNI
+RUN cmake -B build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER=gcc \
+      -DCMAKE_CXX_COMPILER=g++ \
+      -DENABLE_TESTS=OFF \
+      -DENABLE_PYTHON_BINDINGS=OFF \
+      -DENABLE_NODE_BINDINGS=OFF \
+      -DENABLE_JAVA_BINDINGS=OFF \
+      -DENABLE_SINGLE_FILES_WERROR=OFF \
+    && cmake --build build \
+         --target valhalla_build_tiles valhalla_build_admins \
+         -j"$(nproc)" \
+    && cmake --install build --prefix /usr/local
+
+# Smoke-test: both binaries must exist and report a version
+RUN valhalla_build_tiles --version 2>&1 | head -1 \
+ && valhalla_build_admins --version 2>&1 | head -1 \
+ && echo "✅ tile builder binaries verified"
+
+# =============================================================================
+# Stage 2: Runner
+# =============================================================================
+FROM ubuntu:22.04 AS runner
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Runtime-only dependencies (no dev headers)
+RUN apt-get update && apt-get install -y \
+    libboost-filesystem1.74.0 \
+    libboost-regex1.74.0 \
+    libboost-date-time1.74.0 \
+    libcurl4 \
+    libprotobuf-lite23 \
+    libsqlite3-0 \
+    libspatialite7 \
+    libsqlite3-mod-spatialite \
+    liblz4-1 \
+    libgeos-c1v5 \
+    liblua5.3-0 \
+    libluajit-5.1-2 \
+    libzmq5 libczmq4 \
+    zlib1g \
+    # Tile pipeline utilities
+    wget curl jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy compiled binaries and shared libraries from builder
+COPY --from=builder /usr/local/bin/valhalla_build_tiles  /usr/local/bin/
+COPY --from=builder /usr/local/bin/valhalla_build_admins /usr/local/bin/
+COPY --from=builder /usr/local/lib/libvalhalla*          /usr/local/lib/
+COPY --from=builder /usr/local/share/valhalla/           /usr/local/share/valhalla/
+
+RUN ldconfig
+
+# Final verification — both binaries must run
+RUN valhalla_build_tiles  --version 2>&1 | head -1 \
+ && valhalla_build_admins --version 2>&1 | head -1 \
+ && echo "✅ runner stage verified"
+
+# The pipeline mounts:
+#   /valhalla/tiles  ← output tile directory
+#   /valhalla/osm    ← OSM .pbf input
+#   /valhalla/admin  ← admin SQLite output
+#   /valhalla/config ← valhalla build config JSON
+VOLUME ["/valhalla/tiles", "/valhalla/osm", "/valhalla/admin", "/valhalla/config"]
+
+ENTRYPOINT ["/bin/bash"]
