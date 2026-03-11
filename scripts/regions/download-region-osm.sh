@@ -49,8 +49,8 @@ load_pipeline_config() {
             config_file="${VALHALLA_PIPELINE_CONFIG}"
         else
             local env="${VALHALLA_ENV:-local}"
-            local env_conf="${PROJECT_ROOT}/config/pipeline/pipeline.${env}.conf"
-            local local_conf="${PROJECT_ROOT}/config/pipeline/pipeline.local.conf"
+            local env_conf="${PROJECT_ROOT}/deploy/config/pipeline.${env}.conf"
+            local local_conf="${PROJECT_ROOT}/deploy/config/pipeline.local.conf"
             if [[ -f "${env_conf}" ]]; then
                 config_file="${env_conf}"
             elif [[ -f "${local_conf}" ]]; then
