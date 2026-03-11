@@ -260,8 +260,8 @@ _load_pipeline_config() {
             config_file="${VALHALLA_PIPELINE_CONFIG}"
         else
             local env="${VALHALLA_ENV:-local}"
-            local env_conf="${PROJECT_ROOT}/config/pipeline/pipeline.${env}.conf"
-            local local_conf="${PROJECT_ROOT}/config/pipeline/pipeline.local.conf"
+            local env_conf="${PROJECT_ROOT}/deploy/config/pipeline.${env}.conf"
+            local local_conf="${PROJECT_ROOT}/deploy/config/pipeline.local.conf"
             if [[ -f "${env_conf}" ]]; then
                 config_file="${env_conf}"
             elif [[ -f "${local_conf}" ]]; then
@@ -795,7 +795,7 @@ Examples:
   ./run-tile-pipeline.sh singapore --pipeline-config /etc/valhalla/pipeline.conf
 
   # Cron job example (every Tuesday 02:00 SGT = Monday 18:00 UTC):
-  # 0 18 * * 1 cd /opt/valhalla && VALHALLA_ENV=prod ./scripts/regions/run-tile-pipeline.sh singapore >> /var/log/valhalla/cron.log 2>&1
+  # 0 18 * * 1 cd /opt/valhalla && VALHALLA_ENV=prod ./deploy/scripts/run-tile-pipeline.sh singapore >> /var/log/valhalla/cron.log 2>&1
 
 EOF
 }

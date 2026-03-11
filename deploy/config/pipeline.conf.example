@@ -7,11 +7,12 @@
 # Load order (first found wins):
 #   1. --pipeline-config <path> CLI flag
 #   2. VALHALLA_PIPELINE_CONFIG env var
-#   3. config/pipeline/pipeline.<VALHALLA_ENV>.conf  (VALHALLA_ENV=local|dev|test|staging|prod)
-#   4. config/pipeline/pipeline.local.conf           (fallback default)
+#   3. deploy/config/pipeline.<VALHALLA_ENV>.conf  (VALHALLA_ENV=local|dev|test|staging|prod)
+#   4. deploy/config/pipeline.local.conf           (fallback default)
 #
-# NEVER commit pipeline.local.conf, pipeline.staging.conf, pipeline.prod.conf
-# Only pipeline.conf.example is committed to git.
+# NEVER commit pipeline.local.conf, pipeline.dev.conf, pipeline.test.conf,
+# pipeline.staging.conf, or pipeline.prod.conf — only pipeline.conf.example
+# is committed to git.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -24,55 +25,60 @@ VALHALLA_ENV=local
 # ---------------------------------------------------------------------------
 
 # Root directory where per-region tile subdirectories are created.
-# Structure: VALHALLA_TILE_DIR/<region>/*.gph
-# Local example:   /mnt/c/Users/you/Workspace/valhallaV3/data/valhalla_tiles
-# Staging/prod:    /var/valhalla/tiles
-VALHALLA_TILE_DIR=/mnt/c/Users/yourname/Workspace/valhallaV3/data/valhalla_tiles
+# Structure: VALHALLA_TILE_DIR/<region>/latest/  (symlink → versioned dir)
+#
+# local:          data/valhalla_tiles  (relative to project root)
+# dev/test:       /var/valhalla/tiles
+# staging/prod:   /mnt/efs/valhalla_tiles  (EFS mount)
+VALHALLA_TILE_DIR=data/valhalla_tiles
 
 # Directory where OSM .pbf files are stored.
 # Naming convention: <region>-latest.osm.pbf  (e.g. singapore-latest.osm.pbf)
-# Local example:   /mnt/c/Users/you/Workspace/valhallaV3/data/osm
-# Staging/prod:    /var/valhalla/osm
-OSM_DIR=/mnt/c/Users/yourname/Workspace/valhallaV3/data/osm
+#
+# local:        data/osm
+# staging/prod: /mnt/efs/valhalla_osm  (EFS mount, shared with builder)
+OSM_DIR=data/osm
 
 # Directory for admin boundary SQLite databases (admins.sqlite, timezones.sqlite).
-# Local example:   /mnt/c/Users/you/Workspace/valhallaV3/data/admin_data
-# Staging/prod:    /var/valhalla/admin
-VALHALLA_ADMIN_DIR=/mnt/c/Users/yourname/Workspace/valhallaV3/data/admin_data
+#
+# local:        data/admin_data
+# staging/prod: /mnt/efs/valhalla_admin  (EFS mount)
+VALHALLA_ADMIN_DIR=data/admin_data
 
 # Directory for build logs.
-VALHALLA_LOG_DIR=/mnt/c/Users/yourname/Workspace/valhallaV3/logs
+# Logs are kept local to the builder — not on EFS.
+VALHALLA_LOG_DIR=logs
 
 # ---------------------------------------------------------------------------
 # Build options
 # ---------------------------------------------------------------------------
 
 # Skip elevation data during tile build (true = faster builds, no height data)
+# Recommended: false for prod, true for dev/test/staging
 SKIP_ELEVATION=true
 
-# Clean existing tiles before building (true = full rebuild)
+# Clean existing tiles before building (true = full rebuild from scratch)
 CLEAN_BUILD=false
 
 # ---------------------------------------------------------------------------
-# S3 / Object storage (staging and prod only — leave blank for local)
+# S3 / Object storage (staging and prod only — leave blank for local/dev)
 # ---------------------------------------------------------------------------
 
-# S3 bucket where finished tiles are uploaded.
-# Leave blank to skip S3 upload.
-# Example: s3://your-company-valhalla/tiles
+# S3 bucket where finished tiles are archived after a successful build.
+# Format: s3://<bucket-name>/tiles
+# Leave blank to skip S3 upload entirely.
 S3_TILE_BUCKET=
 
-# AWS region for the S3 bucket
+# AWS region for the S3 bucket (must match the bucket region)
 S3_REGION=ap-southeast-1
 
 # ---------------------------------------------------------------------------
-# Valhalla binary
+# Valhalla binary / Docker
 # ---------------------------------------------------------------------------
 
-# Path to valhalla_build_tiles binary.
-# Leave blank to use system PATH or Docker fallback.
-# Local (built from source): /mnt/c/Users/you/Workspace/valhallaV3/build/src/valhalla_build_tiles
+# Path to valhalla_build_tiles binary (only needed if built from source).
+# Leave blank to use system PATH or fall back to Docker.
 VALHALLA_BUILD_TILES_BIN=
 
-# Docker image to use when valhalla_build_tiles binary is not found.
+# Docker image used when valhalla_build_tiles binary is not found on PATH.
 VALHALLA_DOCKER_IMAGE=ghcr.io/valhalla/valhalla:latest

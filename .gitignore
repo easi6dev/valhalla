@@ -84,6 +84,13 @@ temp/
 # OSM data files and generated tiles
 data/
 
+# Pipeline config files (contain local/env-specific paths — never commit)
+deploy/config/pipeline.local.conf
+deploy/config/pipeline.dev.conf
+deploy/config/pipeline.test.conf
+deploy/config/pipeline.staging.conf
+deploy/config/pipeline.prod.conf
+
 # Compiled native libraries (binaries should not be committed)
 *.so
 *.so.*
@@ -116,6 +123,8 @@ load-test-*.log
 # Claude Code temporary files
 .claude/test_status.ps1
 .claude/status_debug.log
+.claude/
+.claude-flow/
 
 # IDE module files (keep project-level config only)
 *.iml
@@ -134,3 +143,5 @@ src/bindings/java/gradle-8.5/
 /.claude/status_line_command.ps1
 /.claude/status_line_command.sh
 /.claude/STATUS_LINE_README.md
+/.mcp.json
+/CLAUDE.md
