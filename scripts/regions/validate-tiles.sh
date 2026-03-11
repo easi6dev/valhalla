@@ -33,7 +33,36 @@ NC='\033[0m'
 # Script paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-REGIONS_CONFIG="${VALHALLA_REGIONS_CONFIG:-${PROJECT_ROOT}/config/regions/regions.json}"
+
+# ---------------------------------------------------------------------------
+# Load pipeline config file
+# ---------------------------------------------------------------------------
+load_pipeline_config() {
+    local config_file="${1:-}"
+
+    if [[ -z "${config_file}" ]]; then
+        if [[ -n "${VALHALLA_PIPELINE_CONFIG:-}" && -f "${VALHALLA_PIPELINE_CONFIG}" ]]; then
+            config_file="${VALHALLA_PIPELINE_CONFIG}"
+        else
+            local env="${VALHALLA_ENV:-local}"
+            local env_conf="${PROJECT_ROOT}/config/pipeline/pipeline.${env}.conf"
+            local local_conf="${PROJECT_ROOT}/config/pipeline/pipeline.local.conf"
+            if [[ -f "${env_conf}" ]]; then
+                config_file="${env_conf}"
+            elif [[ -f "${local_conf}" ]]; then
+                config_file="${local_conf}"
+            fi
+        fi
+    fi
+
+    if [[ -n "${config_file}" && -f "${config_file}" ]]; then
+        # shellcheck source=/dev/null
+        source "${config_file}"
+        echo -e "${YELLOW}[i]${NC} Loaded pipeline config: ${config_file}"
+    fi
+}
+
+REGIONS_CONFIG=""
 
 # Helper functions
 print_header() {
@@ -229,24 +258,28 @@ main() {
 
     local region=$1
     shift
-
-    # Defaults — env vars take priority, CLI flags override
-    TILE_DIR_ROOT="${VALHALLA_TILE_DIR:-${PROJECT_ROOT}/data/valhalla_tiles}"
-    ADMIN_DIR="${VALHALLA_ADMIN_DIR:-${PROJECT_ROOT}/data/admin_data}"
+    local pipeline_config_file=""
+    local tile_dir_override=""
+    local admin_dir_override=""
+    local regions_config_override=""
 
     # Parse optional arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --pipeline-config)
+                pipeline_config_file="$2"
+                shift 2
+                ;;
             --tile-dir)
-                TILE_DIR_ROOT="$2"
+                tile_dir_override="$2"
                 shift 2
                 ;;
             --admin-dir)
-                ADMIN_DIR="$2"
+                admin_dir_override="$2"
                 shift 2
                 ;;
             --config)
-                REGIONS_CONFIG="$2"
+                regions_config_override="$2"
                 shift 2
                 ;;
             -h|--help)
@@ -260,6 +293,14 @@ main() {
                 ;;
         esac
     done
+
+    # Load pipeline config first
+    load_pipeline_config "${pipeline_config_file}"
+
+    # CLI flags override config file values
+    TILE_DIR_ROOT="${tile_dir_override:-${VALHALLA_TILE_DIR:-${PROJECT_ROOT}/data/valhalla_tiles}}"
+    ADMIN_DIR="${admin_dir_override:-${VALHALLA_ADMIN_DIR:-${PROJECT_ROOT}/data/admin_data}}"
+    REGIONS_CONFIG="${regions_config_override:-${VALHALLA_REGIONS_CONFIG:-${PROJECT_ROOT}/config/regions/regions.json}}"
 
     validate_tiles "${region}"
 }

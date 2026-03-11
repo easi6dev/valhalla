@@ -43,7 +43,40 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Configuration — env vars take priority, CLI flags override, then defaults
+# ---------------------------------------------------------------------------
+# Load pipeline config file
+# Priority: --config flag > VALHALLA_PIPELINE_CONFIG env > pipeline.<env>.conf
+#           > pipeline.local.conf > defaults
+# ---------------------------------------------------------------------------
+load_pipeline_config() {
+    local config_file="${1:-}"
+
+    # Resolve config file path
+    if [[ -z "${config_file}" ]]; then
+        if [[ -n "${VALHALLA_PIPELINE_CONFIG:-}" && -f "${VALHALLA_PIPELINE_CONFIG}" ]]; then
+            config_file="${VALHALLA_PIPELINE_CONFIG}"
+        else
+            local env="${VALHALLA_ENV:-local}"
+            local env_conf="${PROJECT_ROOT}/config/pipeline/pipeline.${env}.conf"
+            local local_conf="${PROJECT_ROOT}/config/pipeline/pipeline.local.conf"
+            if [[ -f "${env_conf}" ]]; then
+                config_file="${env_conf}"
+            elif [[ -f "${local_conf}" ]]; then
+                config_file="${local_conf}"
+            fi
+        fi
+    fi
+
+    if [[ -n "${config_file}" && -f "${config_file}" ]]; then
+        # shellcheck source=/dev/null
+        source "${config_file}"
+        print_info "Loaded pipeline config: ${config_file}"
+    else
+        print_info "No pipeline config file found — using defaults"
+    fi
+}
+
+# Defaults (overridden by config file or CLI flags)
 REGIONS_CONFIG="${VALHALLA_REGIONS_CONFIG:-${PROJECT_ROOT}/config/regions/regions.json}"
 TILE_DIR_ROOT="${VALHALLA_TILE_DIR:-${PROJECT_ROOT}/data/valhalla_tiles}"
 OSM_DIR="${OSM_DIR:-${PROJECT_ROOT}/data/osm}"
@@ -85,12 +118,22 @@ check_dependencies() {
         missing_deps+=("jq")
     fi
 
-    # Check for valhalla_build_tiles or Docker
+    # Check for valhalla_build_tiles binary (config file path, PATH, or Docker fallback)
     USE_DOCKER=false
-    if command -v valhalla_build_tiles &> /dev/null; then
-        print_info "Using native Valhalla installation"
-    elif command -v docker &> /dev/null && docker image inspect ghcr.io/valhalla/valhalla:latest &> /dev/null; then
-        print_info "Using Docker-based Valhalla"
+    local bin="${VALHALLA_BUILD_TILES_BIN:-}"
+    local docker_image="${VALHALLA_DOCKER_IMAGE:-ghcr.io/valhalla/valhalla:latest}"
+    if [[ -n "${bin}" && -x "${bin}" ]]; then
+        print_info "Using Valhalla binary: ${bin}"
+        # Make it available as valhalla_build_tiles for the rest of the script
+        export PATH="$(dirname "${bin}"):${PATH}"
+    elif command -v valhalla_build_tiles &> /dev/null; then
+        print_info "Using native Valhalla installation (system PATH)"
+    elif command -v docker &> /dev/null; then
+        if ! docker image inspect "${docker_image}" &> /dev/null; then
+            print_info "Pulling Docker image: ${docker_image}"
+            docker pull "${docker_image}"
+        fi
+        print_info "Using Docker-based Valhalla (${docker_image})"
         USE_DOCKER=true
     else
         missing_deps+=("valhalla_build_tiles or docker")
@@ -496,11 +539,16 @@ main() {
     local region=$1
     local clean_build=false
     local skip_elevation=false
+    local pipeline_config_file=""
 
     # Parse optional arguments
     shift
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --pipeline-config)
+                pipeline_config_file="$2"
+                shift 2
+                ;;
             --tile-dir)
                 TILE_DIR_ROOT="$2"
                 shift 2
@@ -540,6 +588,24 @@ main() {
                 ;;
         esac
     done
+
+    # Load pipeline config (after CLI parsing so --pipeline-config is resolved)
+    load_pipeline_config "${pipeline_config_file}"
+
+    # Re-apply defaults after config load (CLI flags always win over config file)
+    TILE_DIR_ROOT="${TILE_DIR_ROOT:-${VALHALLA_TILE_DIR:-${PROJECT_ROOT}/data/valhalla_tiles}}"
+    OSM_DIR="${OSM_DIR:-${PROJECT_ROOT}/data/osm}"
+    ADMIN_DIR="${ADMIN_DIR:-${VALHALLA_ADMIN_DIR:-${PROJECT_ROOT}/data/admin_data}}"
+    LOG_DIR="${LOG_DIR:-${VALHALLA_LOG_DIR:-${PROJECT_ROOT}/logs}}"
+    REGIONS_CONFIG="${REGIONS_CONFIG:-${VALHALLA_REGIONS_CONFIG:-${PROJECT_ROOT}/config/regions/regions.json}}"
+
+    # Config file SKIP_ELEVATION / CLEAN_BUILD (only if not set via CLI flag)
+    if [[ "${skip_elevation}" == false && "${SKIP_ELEVATION:-false}" == true ]]; then
+        skip_elevation=true
+    fi
+    if [[ "${clean_build}" == false && "${CLEAN_BUILD:-false}" == true ]]; then
+        clean_build=true
+    fi
 
     print_info "Tile dir root: ${TILE_DIR_ROOT}"
     print_info "OSM dir:       ${OSM_DIR}"

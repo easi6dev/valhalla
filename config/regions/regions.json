@@ -66,16 +66,6 @@
           "maneuver_penalty": 5,
           "use_highways": 1.0,
           "use_tolls": 0.8
-        },
-        "truck": {
-          "maneuver_penalty": 15,
-          "height": 4.0,
-          "width": 2.5,
-          "length": 18.0,
-          "weight": 40.0,
-          "axle_load": 8.0,
-          "use_highways": 1.0,
-          "use_tolls": 0.9
         }
       },
       "timezone": "Asia/Bangkok",
@@ -91,7 +81,7 @@
       "description": "Configure tile directory root via VALHALLA_TILE_DIR environment variable",
       "default": "data/valhalla_tiles",
       "examples": {
-        "development": "data/valhalla_tiles",
+        "development": "/var/valhalla_tiles",
         "production": "/var/valhalla/tiles",
         "staging": "/var/valhalla/tiles"
       }
