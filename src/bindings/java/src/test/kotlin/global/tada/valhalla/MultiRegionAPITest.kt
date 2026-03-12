@@ -102,17 +102,6 @@ class MultiRegionAPITest {
     }
 
     @Test
-    fun `test SingaporeConfig buildConfig`() {
-        val config = SingaporeConfig.buildConfig(
-            tileDir = "test/tiles",
-            enableTraffic = false
-        )
-        assertTrue(config.contains("mjolnir"))
-        assertTrue(config.contains("test/tiles"))
-        assertTrue(config.contains("service_limits"))
-    }
-
-    @Test
     fun `test SingaporeConfig costing profiles`() {
         val autoProfile = SingaporeConfig.autoProfile()
         assertTrue(autoProfile.contains("costing"))
@@ -125,14 +114,4 @@ class MultiRegionAPITest {
         assertTrue(taxiProfile.contains("costing"))
     }
 
-    @Test
-    fun `test backward compatibility - deprecated Bounds object`() {
-        @Suppress("DEPRECATION")
-        val minLat = SingaporeConfig.Bounds.MIN_LAT
-        assertEquals(1.15, minLat)
-
-        @Suppress("DEPRECATION")
-        val isValid = SingaporeConfig.Bounds.isValidLocation(1.3, 103.8)
-        assertTrue(isValid)
-    }
 }

@@ -341,22 +341,6 @@ class Actor(config: String) : AutoCloseable {
         }
 
         /**
-         * Create Actor with region-specific configuration
-         *
-         * @param region Region to configure (Singapore, Thailand)
-         * @param regionsConfigFile Path to regions.json (default: config/regions/regions.json)
-         * @return Actor instance configured for the specified region
-         */
-        @JvmStatic
-        fun createForRegion(
-            region: global.tada.valhalla.config.RegionConfig.Region,
-            regionsConfigFile: String = "config/regions/regions.json"
-        ): Actor {
-            val config = global.tada.valhalla.config.RegionConfig.loadRegionConfig(region, regionsConfigFile)
-            return Actor(config)
-        }
-
-        /**
          * Create Actor from configuration file
          *
          * @param configFile Path to Valhalla configuration JSON file

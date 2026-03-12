@@ -29,7 +29,7 @@ set -euo pipefail
 # Resolve canonical paths — works regardless of where the script is invoked from
 # -----------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 JNI_DIR="${REPO_ROOT}/src/bindings/java"
 RESOURCES_LINUX="${JNI_DIR}/src/main/resources/lib/linux-amd64"
 LOG_DIR="${REPO_ROOT}/logs"
@@ -448,10 +448,11 @@ fi
 
 log "${JAR_LIBS}"
 
-# Check required Linux entries
+# Check required Linux entries (must match Actor.kt getRequiredLibraries() load order)
 REQUIRED=(
     "lib/linux-amd64/libvalhalla_jni.so"
     "lib/linux-amd64/libvalhalla.so"
+    "lib/linux-amd64/libvalhalla.so.3"
 )
 MISSING=()
 for entry in "${REQUIRED[@]}"; do
@@ -462,6 +463,35 @@ for entry in "${REQUIRED[@]}"; do
         MISSING+=("${entry}")
     fi
 done
+
+# libprotobuf-lite.so.* — Actor.kt loads this first; exact version varies by system
+PROTOBUF_IN_JAR=$(echo "${JAR_LIBS}" | grep -E "lib/linux-amd64/libprotobuf-lite\.so\." || true)
+if [[ -n "${PROTOBUF_IN_JAR}" ]]; then
+    ok "  present: $(echo "${PROTOBUF_IN_JAR}" | awk '{print $NF}' | head -1)"
+else
+    err "  MISSING: lib/linux-amd64/libprotobuf-lite.so.* (required for Linux load order)"
+    MISSING+=("lib/linux-amd64/libprotobuf-lite.so.*")
+fi
+
+# Check Windows DLLs are present (build may target multi-platform JARs)
+WIN_REQUIRED=(
+    "lib/win32-x86-64/zlib1.dll"
+    "lib/win32-x86-64/lz4.dll"
+    "lib/win32-x86-64/libcurl.dll"
+    "lib/win32-x86-64/abseil_dll.dll"
+    "lib/win32-x86-64/libprotobuf-lite.dll"
+    "lib/win32-x86-64/valhalla_jni.dll"
+)
+WIN_MISSING=0
+for entry in "${WIN_REQUIRED[@]}"; do
+    if echo "${JAR_LIBS}" | grep -q "${entry}"; then
+        ok "  present: ${entry}"
+    else
+        info "  absent : ${entry} (Windows DLL — skip if Linux-only build)"
+        (( WIN_MISSING++ )) || true
+    fi
+done
+[[ ${WIN_MISSING} -gt 0 ]] && info "${WIN_MISSING} Windows DLL(s) absent — expected for Linux-only builds"
 
 if [[ ${#MISSING[@]} -gt 0 ]]; then
     err "JAR is missing ${#MISSING[@]} required native librar(y|ies)."

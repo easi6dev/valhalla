@@ -187,7 +187,8 @@ fun createConfigWithTileDir(tileDir: String, region: String = "singapore"): Stri
     val resolvedPath = TileConfig.fromPath(tileDir)
 
     return when (region.lowercase()) {
-        "singapore" -> global.tada.valhalla.config.SingaporeConfig.buildConfig(
+        "singapore" -> RegionConfigFactory.buildConfig(
+            region = "singapore",
             tileDir = resolvedPath,
             enableTraffic = false
         )

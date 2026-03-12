@@ -33,12 +33,44 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Configuration paths — env vars take priority, then CLI flags, then defaults
-REGIONS_CONFIG="${VALHALLA_REGIONS_CONFIG:-${PROJECT_ROOT}/config/regions/regions.json}"
-DATA_DIR="${OSM_DIR:-${PROJECT_ROOT}/data/osm}"
-
 # Flags
 AUTO_YES=false
+
+# ---------------------------------------------------------------------------
+# Load pipeline config file
+# Priority: --pipeline-config flag > VALHALLA_PIPELINE_CONFIG env
+#           > pipeline.<VALHALLA_ENV>.conf > pipeline.local.conf > defaults
+# ---------------------------------------------------------------------------
+load_pipeline_config() {
+    local config_file="${1:-}"
+
+    if [[ -z "${config_file}" ]]; then
+        if [[ -n "${VALHALLA_PIPELINE_CONFIG:-}" && -f "${VALHALLA_PIPELINE_CONFIG}" ]]; then
+            config_file="${VALHALLA_PIPELINE_CONFIG}"
+        else
+            local env="${VALHALLA_ENV:-local}"
+            local env_conf="${PROJECT_ROOT}/deploy/config/pipeline.${env}.conf"
+            local local_conf="${PROJECT_ROOT}/deploy/config/pipeline.local.conf"
+            if [[ -f "${env_conf}" ]]; then
+                config_file="${env_conf}"
+            elif [[ -f "${local_conf}" ]]; then
+                config_file="${local_conf}"
+            fi
+        fi
+    fi
+
+    if [[ -n "${config_file}" && -f "${config_file}" ]]; then
+        # shellcheck source=/dev/null
+        source "${config_file}"
+        echo -e "${YELLOW}[i]${NC} Loaded pipeline config: ${config_file}"
+    else
+        echo -e "${YELLOW}[i]${NC} No pipeline config file found — using defaults"
+    fi
+}
+
+# Configuration paths — populated after load_pipeline_config is called in main
+REGIONS_CONFIG=""
+DATA_DIR=""
 
 # Helper functions
 print_header() {
@@ -250,10 +282,15 @@ main() {
 
     local region=$1
     shift
+    local pipeline_config_file=""
 
     # Parse optional arguments (region is already consumed above)
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --pipeline-config)
+                pipeline_config_file="$2"
+                shift 2
+                ;;
             --osm-dir)
                 DATA_DIR="$2"
                 shift 2
@@ -277,6 +314,13 @@ main() {
                 ;;
         esac
     done
+
+    # Load pipeline config (CLI --osm-dir / --config flags override it below)
+    load_pipeline_config "${pipeline_config_file}"
+
+    # Resolve final values: CLI flag > config file value > default
+    DATA_DIR="${DATA_DIR:-${OSM_DIR:-${PROJECT_ROOT}/data/osm}}"
+    REGIONS_CONFIG="${REGIONS_CONFIG:-${VALHALLA_REGIONS_CONFIG:-${PROJECT_ROOT}/config/regions/regions.json}}"
 
     print_info "OSM directory: ${DATA_DIR}"
     print_info "Regions config: ${REGIONS_CONFIG}"
