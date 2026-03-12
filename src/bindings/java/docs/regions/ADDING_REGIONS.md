@@ -40,10 +40,7 @@ Complete guide for adding routing regions to your Valhalla system - from interna
 valhalla/
 ├── config/
 │   └── regions/
-│       ├── regions.json          # Region definitions
-│       ├── regions-dev.json      # Development config
-│       ├── regions-prod.json     # Production config
-│       └── regions-staging.json  # Staging config
+│       └── regions.json          # Region definitions (all environments)
 │
 ├── data/
 │   ├── osm/                      # Downloaded OSM files
@@ -81,7 +78,7 @@ cd /path/to/valhalla
 ./scripts/regions/validate-tiles.sh thailand
 
 # 5. Set environment variable
-export VALHALLA_TILES_DIR=$(pwd)/data/valhalla_tiles
+export VALHALLA_TILE_DIR=$(pwd)/data/valhalla_tiles
 ```
 
 ### Use in Code
@@ -804,7 +801,7 @@ WORKDIR /app
 VOLUME /tiles
 
 # Environment variables
-ENV VALHALLA_TILES_DIR=/tiles
+ENV VALHALLA_TILE_DIR=/tiles
 ENV JAVA_OPTS="-Xmx4g -Xms1g"
 
 EXPOSE 8080
@@ -825,7 +822,7 @@ services:
     volumes:
       - ./data/valhalla_tiles:/tiles:ro
     environment:
-      - VALHALLA_TILES_DIR=/tiles
+      - VALHALLA_TILE_DIR=/tiles
       - ENABLED_REGIONS=thailand,singapore,new-york
     deploy:
       resources:
@@ -858,7 +855,7 @@ spec:
         ports:
         - containerPort: 8080
         env:
-        - name: VALHALLA_TILES_DIR
+        - name: VALHALLA_TILE_DIR
           value: "/tiles"
         - name: ENABLED_REGIONS
           value: "thailand,singapore,new-york"
@@ -1014,12 +1011,12 @@ Error: Tiles not found
 
 1. Check environment variable:
    ```bash
-   echo $VALHALLA_TILES_DIR
+   echo $VALHALLA_TILE_DIR
    ```
 
 2. Verify tile directory exists:
    ```bash
-   ls -la $VALHALLA_TILES_DIR/thailand/2/000/
+   ls -la $VALHALLA_TILE_DIR/thailand/2/000/
    ```
 
 3. Use direct path:
@@ -1128,7 +1125,7 @@ import global.tada.valhalla.Actor
 
 fun main() {
     // Set environment variable
-    // export VALHALLA_TILES_DIR=/path/to/data/valhalla_tiles
+    // export VALHALLA_TILE_DIR=/path/to/data/valhalla_tiles
 
     val actor = Actor.createWithExternalTiles("region-name")
 

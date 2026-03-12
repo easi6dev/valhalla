@@ -23,22 +23,11 @@ docs/
 │   ├── README.md               # Region documentation index
 │   ├── ADDING_REGIONS.md       # Complete guide to add regions
 │   └── MULTI_REGION_API.md     # Multi-region API reference
-├── implementation/      # Implementation details (phases 1-5)
-│   ├── PHASE1_IMPLEMENTATION.md
-│   ├── PHASE2_IMPLEMENTATION.md
-│   ├── PHASE3_IMPLEMENTATION.md
-│   ├── PHASE4_IMPLEMENTATION.md
-│   └── PHASE5_IMPLEMENTATION.md
 ├── setup/              # Setup guides
-│   ├── README.md
-│   ├── COMPLETE_SETUP_GUIDE.md
-│   └── INTEGRATION_GUIDE.md
-├── singapore/          # Singapore-specific docs
-│   ├── SINGAPORE_QUICKSTART.md
-│   └── CONFIGURATION_REFERENCE.md
-└── archived/           # Deprecated/superseded docs
-    ├── BUILD_GUIDE.md
-    └── EXTERNAL_TILES_GUIDE.md
+│   ├── BUILD_AND_RUN.md        # Full build & run walkthrough
+│   └── INTEGRATION_GUIDE.md    # Integration guide
+└── singapore/          # Singapore-specific docs
+    └── CONFIGURATION_REFERENCE.md  # Valhalla config options reference
 ```
 
 ---
@@ -154,52 +143,6 @@ aws ecs create-service --cluster valhalla-production ...
 
 ---
 
-## 📊 Implementation Phases
-
-Detailed documentation of the 5 implementation phases:
-
-### Phase 1: Critical Fixes
-**Doc**: [implementation/PHASE1_IMPLEMENTATION.md](implementation/PHASE1_IMPLEMENTATION.md)
-- JNI memory management (RAII)
-- Native library loading (78% JAR size reduction)
-- Build script optimization
-
-### Phase 2: Configuration Optimization
-**Doc**: [implementation/PHASE2_IMPLEMENTATION.md](implementation/PHASE2_IMPLEMENTATION.md)
-- Configuration consolidation
-- Environment auto-detection
-- Configuration validation
-
-### Phase 3: Documentation Consolidation
-**Doc**: [implementation/PHASE3_IMPLEMENTATION.md](implementation/PHASE3_IMPLEMENTATION.md)
-- User/Developer/DevOps guides created
-- Docker deployment templates
-- Deployment documentation
-
-### Phase 4: Build Optimization
-**Doc**: [implementation/PHASE4_IMPLEMENTATION.md](implementation/PHASE4_IMPLEMENTATION.md)
-- Gradle version catalog
-- Build cache (80-90% faster)
-- Code quality (Detekt, KtLint)
-
-### Phase 5: Testing & Monitoring
-**Doc**: [implementation/PHASE5_IMPLEMENTATION.md](implementation/PHASE5_IMPLEMENTATION.md)
-- JMH benchmarks
-- Load testing
-- Metrics collection
-- Grafana dashboards
-
----
-
-## 🗂️ Archived Documentation
-
-Documents in `archived/` have been superseded by newer guides:
-
-- **BUILD_GUIDE.md** → See [DEVELOPMENT.md](guides/DEVELOPMENT.md) instead
-- **EXTERNAL_TILES_GUIDE.md** → See [QUICKSTART.md](guides/QUICKSTART.md) → "External Tile Directory Configuration"
-
----
-
 ## 🔍 Search by Topic
 
 ### Configuration
@@ -237,8 +180,8 @@ If you find issues or want to improve the documentation:
 
 1. **Typos/Corrections**: Update the relevant markdown file
 2. **New Guides**: Add to `guides/` directory
-3. **Implementation Details**: Add to `implementation/` directory
-4. **Deprecated Docs**: Move to `archived/` with deprecation notice
+3. **Setup/Integration Docs**: Add to `setup/` directory
+4. **Region Docs**: Add to `regions/` directory
 
 **Documentation Standards**:
 - Use markdown format
@@ -254,7 +197,6 @@ If you find issues or want to improve the documentation:
 ### Documentation Issues
 - Check [QUICKSTART.md](guides/QUICKSTART.md) troubleshooting
 - Search this README for your topic
-- Review implementation phases for context
 
 ### Build Issues
 - See [GRADLE_OPTIMIZATION.md](guides/GRADLE_OPTIMIZATION.md#troubleshooting)
@@ -265,7 +207,6 @@ If you find issues or want to improve the documentation:
 - Check [TESTING_MONITORING_GUIDE.md](guides/TESTING_MONITORING_GUIDE.md#troubleshooting)
 
 ### Still Stuck?
-- Review relevant phase implementation docs
 - Check GitHub issues
 - Consult Valhalla community docs: https://valhalla.github.io/valhalla
 

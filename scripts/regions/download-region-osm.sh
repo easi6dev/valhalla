@@ -20,7 +20,7 @@
 #   VALHALLA_REGIONS_CONFIG  Override regions config file path
 #
 
-set -e
+set -euo pipefail
 
 # Color codes for output
 RED='\033[0;31m'

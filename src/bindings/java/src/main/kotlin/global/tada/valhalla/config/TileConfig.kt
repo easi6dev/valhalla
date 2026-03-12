@@ -14,7 +14,7 @@ import java.io.File
  * Usage:
  * ```kotlin
  * // Option 1: Environment variable
- * // Set: VALHALLA_TILES_DIR=/mnt/tiles
+ * // Set: VALHALLA_TILE_DIR=/mnt/tiles
  * val config = TileConfig.fromEnvironment()
  *
  * // Option 2: Direct path
@@ -39,13 +39,13 @@ object TileConfig {
     /**
      * Get tile directory from environment variable
      *
-     * Checks: VALHALLA_TILES_DIR, VALHALLA_TILE_DIR, TILES_DIR
+     * Checks: VALHALLA_TILE_DIR, VALHALLA_TILES_DIR (legacy), TILES_DIR
      *
      * @param defaultPath Fallback path if env var not set
      * @return Tile directory path
      */
     fun fromEnvironment(defaultPath: String = "data/valhalla_tiles"): String {
-        val envVars = listOf("VALHALLA_TILES_DIR", "VALHALLA_TILE_DIR", "TILES_DIR")
+        val envVars = listOf("VALHALLA_TILE_DIR", "VALHALLA_TILES_DIR", "TILES_DIR")
 
         for (envVar in envVars) {
             val path = System.getenv(envVar)
@@ -93,8 +93,9 @@ object TileConfig {
      *
      * Checks in order:
      * 1. System property (valhalla.tiles.dir)
-     * 2. Environment variable (VALHALLA_TILES_DIR)
-     * 3. Default locations (data/valhalla_tiles, /var/lib/valhalla/tiles, etc.)
+     * 2. Environment variable (VALHALLA_TILE_DIR)
+     * 3. Environment variable (VALHALLA_TILES_DIR) — legacy alias, kept for backward compat
+     * 4. Default locations (data/valhalla_tiles, /var/lib/valhalla/tiles, etc.)
      *
      * @param region Optional region subdirectory (e.g., "singapore")
      * @return Tile directory path
@@ -106,8 +107,8 @@ object TileConfig {
             return resolvePath(sysPropPath, region)
         }
 
-        // Try environment variable
-        val envPath = System.getenv("VALHALLA_TILES_DIR")
+        // Try canonical env var, then legacy alias for backward compat
+        val envPath = System.getenv("VALHALLA_TILE_DIR") ?: System.getenv("VALHALLA_TILES_DIR")
         if (!envPath.isNullOrBlank()) {
             return resolvePath(envPath, region)
         }

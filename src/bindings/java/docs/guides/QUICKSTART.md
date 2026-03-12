@@ -56,10 +56,8 @@ cd src/bindings/java && ./build-jni-bindings.sh
 # Create tiles directory
 mkdir -p data/valhalla_tiles/singapore
 
-# Download pre-built Singapore tiles (option 1)
-# [Add your tile download instructions here]
-
-# OR build tiles from OSM (option 2)
+# Download OSM data then build tiles
+./scripts/regions/download-region-osm.sh singapore
 ./scripts/regions/build-tiles.sh singapore
 ```
 
@@ -121,10 +119,7 @@ Regions are configured in `config/regions/regions.json` (or environment-specific
 **Directory Structure**:
 ```
 config/regions/
-├── regions.json          # Default configuration
-├── regions-dev.json      # Development (all regions enabled)
-├── regions-staging.json  # Staging (selective regions)
-└── regions-prod.json     # Production (optimized for performance)
+└── regions.json          # Single source of truth for all environments
 ```
 
 ### Using Different Regions
@@ -143,19 +138,8 @@ val thActor2 = Actor.createWithExternalTiles("th")
 
 ### Environment-Specific Configuration
 
-```bash
-# Development (local testing)
-export VALHALLA_ENV=dev
-# Uses: config/regions/regions-dev.json
-
-# Staging (pre-production)
-export VALHALLA_ENV=staging
-# Uses: config/regions/regions-staging.json
-
-# Production (optimized)
-export VALHALLA_ENV=prod
-# Uses: config/regions/regions-prod.json
-```
+Regions are enabled/disabled via `"enabled": true/false` in `config/regions/regions.json`.
+Pipeline-level env overrides (tile paths, Docker image, etc.) are managed in `deploy/config/pipeline.<env>.conf`.
 
 ---
 
@@ -167,10 +151,10 @@ Multiple ways to specify tile locations:
 
 ```bash
 # Linux/Mac
-export VALHALLA_TILES_DIR=/mnt/tiles
+export VALHALLA_TILE_DIR=/mnt/tiles
 
 # Windows (PowerShell)
-$env:VALHALLA_TILES_DIR = "D:\valhalla\tiles"
+$env:VALHALLA_TILE_DIR = "D:\valhalla\tiles"
 
 # Use in code
 val actor = Actor.createWithExternalTiles("singapore")
@@ -307,16 +291,12 @@ fun testMultiRegion() {
 Error: Unsupported region: thailand
 ```
 
-**Solution**: Check if region is enabled in your environment config:
+**Solution**: Check if region is enabled in the regions config:
 
 ```bash
-# Check which config file is being used
-echo $VALHALLA_ENV  # dev, staging, prod, or empty (default)
-
 # Verify region is enabled
-cat config/regions/regions-${VALHALLA_ENV:-}.json | grep -A5 '"thailand"'
-
-# Should show: "enabled": true
+jq '.regions.thailand.enabled' config/regions/regions.json
+# Should show: true
 ```
 
 ### Issue: "Tile directory not found"

@@ -475,12 +475,12 @@ fi
 
 # Check Windows DLLs are present (build may target multi-platform JARs)
 WIN_REQUIRED=(
-    "lib/win32-x86-64/zlib1.dll"
-    "lib/win32-x86-64/lz4.dll"
-    "lib/win32-x86-64/libcurl.dll"
-    "lib/win32-x86-64/abseil_dll.dll"
-    "lib/win32-x86-64/libprotobuf-lite.dll"
-    "lib/win32-x86-64/valhalla_jni.dll"
+    "lib/win-amd64/zlib1.dll"
+    "lib/win-amd64/lz4.dll"
+    "lib/win-amd64/libcurl.dll"
+    "lib/win-amd64/abseil_dll.dll"
+    "lib/win-amd64/libprotobuf-lite.dll"
+    "lib/win-amd64/valhalla_jni.dll"
 )
 WIN_MISSING=0
 for entry in "${WIN_REQUIRED[@]}"; do
