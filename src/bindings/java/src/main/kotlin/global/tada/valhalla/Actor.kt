@@ -313,7 +313,7 @@ class Actor(config: String) : AutoCloseable {
          * Create Actor with external tile directory
          *
          * Automatically detects tile location from:
-         * 1. Environment variable: VALHALLA_TILES_DIR
+         * 1. Environment variable: VALHALLA_TILE_DIR
          * 2. System property: valhalla.tiles.dir
          * 3. Default locations
          *

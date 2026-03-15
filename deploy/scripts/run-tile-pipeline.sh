@@ -35,6 +35,7 @@
 # =============================================================================
 
 set -euo pipefail
+trap '' PIPE
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -595,7 +596,7 @@ phase_validate() {
 
     # Check 3: Minimum size
     local tile_mb
-    tile_mb="$(du -m "${VERSIONED_TILE_DIR}" 2>/dev/null | cut -f1)"
+    tile_mb="$(du -sm "${VERSIONED_TILE_DIR}" 2>/dev/null | cut -f1)"
     if [[ ${tile_mb} -gt 10 ]]; then
         log_ok "Tile size: $(du -sh "${VERSIONED_TILE_DIR}" | cut -f1)"
     else
@@ -628,7 +629,7 @@ phase_validate() {
 
     # Check 6: Sample tile readable
     local sample
-    sample="$(find "${VERSIONED_TILE_DIR}" -name "*.gph" | head -1)"
+    sample="$(find "${VERSIONED_TILE_DIR}" -name "*.gph" -print -quit)"
     if [[ -n "${sample}" && -r "${sample}" ]]; then
         log_ok "Sample tile readable: $(basename "${sample}")"
     else
@@ -766,6 +767,7 @@ Options:
   --force-download          Re-download OSM even if fresh
   --osm-max-age-days <n>    Max OSM file age before re-download (default: 6)
   --no-elevation            Skip elevation data
+  --skip-build              Skip OSM download and tile build; validate existing 'latest' tiles
   --keep-versions <n>       Old tile versions to retain (default: 3)
   --dry-run                 Print actions without executing
   --notify-url <url>        POST webhook on completion/failure
@@ -819,6 +821,7 @@ main() {
     FORCE_DOWNLOAD=false
     OSM_MAX_AGE_DAYS=6
     DRY_RUN=false
+    SKIP_BUILD=false
     KEEP_VERSIONS_ARG=""
     NOTIFY_URL="${NOTIFY_URL:-}"
     SKIP_ELEVATION_ARG=""
@@ -830,6 +833,7 @@ main() {
             --force-download)   FORCE_DOWNLOAD=true;        shift   ;;
             --osm-max-age-days) OSM_MAX_AGE_DAYS="$2";     shift 2 ;;
             --no-elevation)     SKIP_ELEVATION_ARG=true;   shift   ;;
+            --skip-build)       SKIP_BUILD=true;            shift   ;;
             --keep-versions)    KEEP_VERSIONS_ARG="$2";    shift 2 ;;
             --dry-run)          DRY_RUN=true;               shift   ;;
             --notify-url)       NOTIFY_URL="$2";            shift 2 ;;
@@ -843,8 +847,19 @@ main() {
 
     # Run pipeline phases
     bootstrap
-    phase_osm
-    phase_build
+    if [[ "${SKIP_BUILD}" == true ]]; then
+        local existing_latest="${VALHALLA_TILE_DIR}/${REGION}/latest"
+        if [[ ! -e "${existing_latest}" ]]; then
+            log_error "--skip-build requires an existing 'latest' symlink at: ${existing_latest}"
+            exit 1
+        fi
+        VERSIONED_TILE_DIR="$(readlink -f "${existing_latest}")"
+        VERSION_TAG="$(basename "${VERSIONED_TILE_DIR}")"
+        log_info "Skipping build — using existing tiles: ${VERSIONED_TILE_DIR}"
+    else
+        phase_osm
+        phase_build
+    fi
     phase_validate
     phase_s3_sync
     phase_swap_latest
