@@ -15,12 +15,19 @@
 #   Step 9 — Verify JAR contents
 #
 # Usage:
-#   chmod +x scripts/build-jni.sh
-#   ./scripts/build-jni.sh            # full interactive build
-#   ./scripts/build-jni.sh --skip-valhalla    # skip Step 2 (core already built)
-#   ./scripts/build-jni.sh --skip-cmake       # skip Steps 2+6 (both .so already present)
-#   ./scripts/build-jni.sh --yes              # answer "yes" to all prompts
-#   ./scripts/build-jni.sh --help
+#   chmod +x scripts/regions/build-jni.sh
+#   ./scripts/regions/build-jni.sh                          # full interactive local build
+#   ./scripts/regions/build-jni.sh --skip-valhalla          # skip Step 2 (core already built)
+#   ./scripts/regions/build-jni.sh --skip-cmake             # skip Steps 2+6 (both .so already present)
+#   ./scripts/regions/build-jni.sh --yes                    # answer "yes" to all prompts
+#   ./scripts/regions/build-jni.sh --from-image             # extract JAR from default ECR image
+#   ./scripts/regions/build-jni.sh --from-image <image>     # extract JAR from specific ECR image tag
+#   ./scripts/regions/build-jni.sh --help
+#
+# Docker image (for --from-image):
+#   Default: 633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:latest
+#   Built by: .github/workflows/build-valhalla-image.yml
+#   Registry: 633107344074.dkr.ecr.ap-southeast-1.amazonaws.com (ap-southeast-1)
 # =============================================================================
 
 set -euo pipefail
@@ -68,19 +75,38 @@ elapsed() {
 SKIP_VALHALLA=false
 SKIP_CMAKE=false
 AUTO_YES=false
+FROM_IMAGE=""  # If set, extract JAR from this Docker image instead of building locally
+ECR_IMAGE_DEFAULT="633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:latest"
 
 for arg in "$@"; do
     case "${arg}" in
         --skip-valhalla) SKIP_VALHALLA=true ;;
         --skip-cmake)    SKIP_CMAKE=true; SKIP_VALHALLA=true ;;
         --yes|-y)        AUTO_YES=true ;;
+        --from-image)
+            # --from-image [<image>]  — next token is the image if it doesn't start with -
+            FROM_IMAGE="__NEXT__"
+            ;;
         --help|-h)
             sed -n '3,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            echo ""
+            echo "  --from-image [<image>]  Extract valhalla-jni.jar from a pre-built ECR Docker image"
+            echo "                          instead of building from source."
+            echo "                          Defaults to: ${ECR_IMAGE_DEFAULT}"
             exit 0
             ;;
-        *) die "Unknown option: ${arg}. Use --help for usage." ;;
+        *)
+            if [[ "${FROM_IMAGE}" == "__NEXT__" && "${arg}" != --* ]]; then
+                FROM_IMAGE="${arg}"
+            else
+                [[ "${FROM_IMAGE}" == "__NEXT__" ]] && FROM_IMAGE="${ECR_IMAGE_DEFAULT}"
+                die "Unknown option: ${arg}. Use --help for usage."
+            fi
+            ;;
     esac
 done
+# If --from-image was the last arg with no value following it
+[[ "${FROM_IMAGE}" == "__NEXT__" ]] && FROM_IMAGE="${ECR_IMAGE_DEFAULT}"
 
 # -----------------------------------------------------------------------------
 # Prompt helper — respects --yes flag
@@ -112,7 +138,70 @@ info "JNI dir   : ${JNI_DIR}"
 info "Resources : ${RESOURCES_LINUX}"
 info "Log file  : ${LOG_FILE}"
 info "CPUs      : ${NPROC}"
-info "Flags     : skip-valhalla=${SKIP_VALHALLA}  skip-cmake=${SKIP_CMAKE}  auto-yes=${AUTO_YES}"
+info "Flags     : skip-valhalla=${SKIP_VALHALLA}  skip-cmake=${SKIP_CMAKE}  auto-yes=${AUTO_YES}  from-image=${FROM_IMAGE:-none}"
+
+# =============================================================================
+# DOCKER IMAGE EXTRACTION MODE  (--from-image)
+# Pulls the pre-built ECR image, extracts /app/valhalla-jni.jar, and unpacks
+# the bundled .so files into the JNI resources dir — no local CMake build needed.
+# This mirrors the extraction snippet published in the GitHub Actions job summary.
+# =============================================================================
+if [[ -n "${FROM_IMAGE}" ]]; then
+    header "Docker Image Extraction Mode"
+    info "Image : ${FROM_IMAGE}"
+
+    command -v docker &>/dev/null || die "docker is required for --from-image mode"
+
+    step "Pulling image..."
+    docker pull "${FROM_IMAGE}" 2>&1 | tee -a "${LOG_FILE}"
+    ok "Image pulled"
+
+    step "Verifying /app/valhalla-jni.jar exists in image..."
+    docker run --rm "${FROM_IMAGE}" sh -c "ls -lh /app/valhalla-jni.jar" \
+        2>&1 | tee -a "${LOG_FILE}" \
+        || die "/app/valhalla-jni.jar not found in image ${FROM_IMAGE}"
+    ok "JAR verified in image"
+
+    step "Verifying native .so libs bundled in JAR..."
+    docker run --rm "${FROM_IMAGE}" sh -c "unzip -l /app/valhalla-jni.jar | grep '\\.so'" \
+        2>&1 | tee -a "${LOG_FILE}" \
+        || die "No .so files found in /app/valhalla-jni.jar — image may be incomplete"
+
+    EXTRACT_DIR="${LOG_DIR}/jar-extract-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "${EXTRACT_DIR}"
+
+    step "Extracting JAR from image → ${EXTRACT_DIR}/valhalla-jni.jar"
+    docker run --rm \
+        -v "${EXTRACT_DIR}:/out" \
+        "${FROM_IMAGE}" \
+        sh -c "cp /app/valhalla-jni.jar /out/" \
+        2>&1 | tee -a "${LOG_FILE}"
+    ok "JAR extracted: ${EXTRACT_DIR}/valhalla-jni.jar"
+
+    JAR_FILE="${EXTRACT_DIR}/valhalla-jni.jar"
+    info "JAR size: $(du -h "${JAR_FILE}" | cut -f1)"
+
+    step "Unpacking native libs into ${RESOURCES_LINUX}/"
+    mkdir -p "${RESOURCES_LINUX}"
+    # Extract only the lib/linux-amd64/ tree from the JAR
+    unzip -o "${JAR_FILE}" "lib/linux-amd64/*" -d "${EXTRACT_DIR}/unpack" \
+        2>&1 | tee -a "${LOG_FILE}"
+    cp "${EXTRACT_DIR}/unpack/lib/linux-amd64/"* "${RESOURCES_LINUX}/" 2>/dev/null || true
+    ok "Native libs copied to resources:"
+    ls -lh "${RESOURCES_LINUX}/" | tee -a "${LOG_FILE}"
+
+    header "Extraction Complete"
+    ok "JAR  : ${JAR_FILE}"
+    ok "Libs : ${RESOURCES_LINUX}/"
+    ok "Log  : ${LOG_FILE}"
+    echo ""
+    info "To use this JAR directly:"
+    echo "  implementation(files(\"${JAR_FILE}\"))"
+    echo ""
+    info "To publish to local Maven, copy the JAR to ${JNI_DIR}/build/libs/ and run:"
+    echo "  cd ${JNI_DIR} && ./gradlew publishToMavenLocal"
+    exit 0
+fi
 
 # =============================================================================
 # STEP 1 — Verify prerequisites
