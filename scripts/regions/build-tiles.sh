@@ -121,7 +121,7 @@ check_dependencies() {
     # Check for valhalla_build_tiles binary (config file path, PATH, or Docker fallback)
     USE_DOCKER=false
     local bin="${VALHALLA_BUILD_TILES_BIN:-}"
-    local docker_image="${VALHALLA_DOCKER_IMAGE:-ghcr.io/valhalla/valhalla:latest}"
+    local docker_image="${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development}"
     if [[ -n "${bin}" && -x "${bin}" ]]; then
         print_info "Using Valhalla binary: ${bin}"
         # Make it available as valhalla_build_tiles for the rest of the script
