@@ -14,6 +14,8 @@ jobs:
             gcc-c++ \
             git \
             make \
+            mingw64-gcc \
+            mingw64-gcc-c++ \
             mingw64-curl \
             mingw64-boost \
             mingw64-protobuf \
@@ -21,13 +23,10 @@ jobs:
             mingw64-gdal \
             mingw64-python3 \
             protobuf-compiler
-      - uses: actions/checkout@v2
-      - name: Checkout submodules
-        shell: bash
-        run: |
-          auth_header="$(git config --local --get http.https://github.com/.extraheader)"
-          git submodule sync --recursive
-          git -c "http.extraheader=$auth_header" -c protocol.version=2 submodule update --init --force --recursive --depth=1
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
       - name: Configure and run build
         run: |
           mkdir build && cd build \
