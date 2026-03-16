@@ -17,13 +17,25 @@ jobs:
             mingw64-gcc \
             mingw64-gcc-c++ \
             mingw64-curl \
-            mingw64-lz4 \
             mingw64-boost \
             mingw64-protobuf \
             mingw64-geos \
             mingw64-gdal \
             mingw64-python3 \
+            lz4-devel \
             protobuf-compiler
+      - name: Build lz4 for MinGW
+        run: |
+          LZ4_VERSION=1.9.4
+          curl -sL https://github.com/lz4/lz4/archive/refs/tags/v${LZ4_VERSION}.tar.gz | tar xz
+          cd lz4-${LZ4_VERSION}
+          mingw64-make -j$(nproc) \
+            CC=x86_64-w64-mingw32-gcc \
+            AR=x86_64-w64-mingw32-ar \
+            PREFIX=/usr/x86_64-w64-mingw32/sys-root/mingw \
+            install
+          cd ..
+          rm -rf lz4-${LZ4_VERSION}
       - uses: actions/checkout@v4
         with:
           submodules: recursive
