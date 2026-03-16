@@ -5,14 +5,16 @@
 #include "mjolnir/pbfadminparser.h"
 #include "mjolnir/sqlite3.h"
 
+// clang-format off
 #include <boost/version.hpp>
-#include <boost/geometry/algorithms/area.hpp>
-#include <boost/geometry/algorithms/covered_by.hpp>
 #if BOOST_VERSION >= 108000
 #include <boost/geometry/strategies/area/spherical.hpp>
 #else
 #include <boost/geometry/strategies/spherical/area.hpp>
 #endif
+// clang-format on
+#include <boost/geometry/algorithms/area.hpp>
+#include <boost/geometry/algorithms/covered_by.hpp>
 #include <boost/geometry/io/wkt/write.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <geos_c.h>
