@@ -10,8 +10,8 @@ import global.tada.valhalla.config.TileConfig
  * Demonstrates managing multiple region actors simultaneously.
  *
  * Usage:
- *   export VALHALLA_TILES_DIR=/path/to/tiles
- *   kotlin MultiRegionExample.kt
+ *   export VALHALLA_TILE_DIR=data/valhalla_tiles
+ *   ./gradlew run
  */
 fun main() {
     println("═══════════════════════════════════════════════════════════")
@@ -23,7 +23,7 @@ fun main() {
     val regions = listOf("singapore", "thailand")
 
     // Detect base tile directory
-    val baseTileDir = TileConfig.fromEnvironment("data/valhalla_tiles")
+    val baseTileDir = TileConfig.fromEnvironment("data/valhalla_tiles/singapore/latest")
     println("📁 Base tile directory: $baseTileDir")
     println()
 

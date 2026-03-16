@@ -11,13 +11,10 @@ import global.tada.valhalla.config.TileConfig
  *
  * Usage:
  * 1. Set environment variable:
- *    export VALHALLA_TILES_DIR=/path/to/tiles
+ *    export VALHALLA_TILE_DIR=data/valhalla_tiles/singapore/latest
  *
  * 2. Run:
- *    kotlin SimpleRoutingExample.kt
- *
- * 3. Or with system property:
- *    kotlin -Dvalhalla.tiles.dir=/path/to/tiles SimpleRoutingExample.kt
+ *    ./gradlew run
  */
 fun main() {
     println("═══════════════════════════════════════════════════════════")
@@ -36,7 +33,7 @@ fun main() {
         println("Please ensure:")
         println("  1. Tiles are built for Singapore")
         println("  2. Directory structure exists: $tileDir/2/000/...")
-        println("  3. Or set VALHALLA_TILES_DIR environment variable")
+        println("  3. Or set VALHALLA_TILE_DIR environment variable")
         return
     }
 
