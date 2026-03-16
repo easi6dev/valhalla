@@ -5,9 +5,9 @@
 #include "mjolnir/pbfadminparser.h"
 #include "mjolnir/sqlite3.h"
 
+#include <boost/version.hpp>
 #include <boost/geometry/algorithms/area.hpp>
 #include <boost/geometry/algorithms/covered_by.hpp>
-#include <boost/version.hpp>
 #if BOOST_VERSION >= 108000
 #include <boost/geometry/strategies/area/spherical.hpp>
 #else
