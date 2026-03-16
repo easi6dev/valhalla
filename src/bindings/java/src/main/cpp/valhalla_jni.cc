@@ -1,9 +1,3 @@
-#include <jni.h>
-#include <string>
-#include <memory>
-#include <stdexcept>
-#include <sstream>
-
 #include "baldr/rapidjson_utils.h"
 #include "config.h"
 #include "midgard/logging.h"
@@ -11,6 +5,12 @@
 #include "tyr/actor.h"
 
 #include <boost/property_tree/ptree.hpp>
+#include <jni.h>
+
+#include <memory>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 
 namespace vt = valhalla::tyr;
 
