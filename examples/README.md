@@ -10,7 +10,6 @@ Complete working examples demonstrating Valhalla routing with external tile conf
 |---------|-------------|------------|
 | [simple-routing](./simple-routing/) | Basic routing with auto-detected tiles | ⭐ Beginner |
 | [multiple-regions](./multiple-regions/) | Managing multiple regional actors | ⭐⭐ Intermediate |
-| [docker-example](./docker-example/) | Dockerized routing service | ⭐⭐⭐ Advanced |
 
 ---
 
@@ -27,13 +26,12 @@ Complete working examples demonstrating Valhalla routing with external tile conf
 2. **Prepare tiles** (for Singapore):
    ```bash
    cd ../..
-   ./scripts/regions/download-region-osm.sh singapore
-   ./scripts/regions/build-tiles.sh singapore
+   bash deploy/scripts/run-tile-pipeline.sh singapore --no-elevation
    ```
 
 3. **Set tile location:**
    ```bash
-   export VALHALLA_TILES_DIR=/path/to/valhalla_tiles
+   export VALHALLA_TILE_DIR=data/valhalla_tiles/singapore/latest
    ```
 
 ---
@@ -102,44 +100,13 @@ cd multiple-regions
 
 ---
 
-## Example 3: Docker Deployment ⭐⭐⭐
-
-**What it does:** Containerized routing service with tile mounting
-
-**Build:**
-```bash
-cd docker-example
-docker build -t valhalla-routing:latest -f Dockerfile ../..
-```
-
-**Run:**
-```bash
-docker run -d \
-  --name valhalla-routing \
-  -e VALHALLA_TILES_DIR=/tiles \
-  -v /host/tiles/singapore:/tiles:ro \
-  -p 8080:8080 \
-  valhalla-routing:latest
-```
-
-**Features:**
-- Multi-stage Docker build
-- External tile mounting
-- Health checks
-- Docker Compose configuration
-- Kubernetes deployment example
-
-[Full README →](./docker-example/README.md)
-
----
-
 ## 🔧 Configuration Methods
 
 All examples support multiple configuration methods:
 
 ### Method 1: Environment Variable
 ```bash
-export VALHALLA_TILES_DIR=/mnt/tiles
+export VALHALLA_TILE_DIR=/mnt/tiles
 ./gradlew run
 ```
 
@@ -166,18 +133,22 @@ val actor = Actor.createWithExternalTiles("singapore")
 Required structure for all examples:
 
 ```
-valhalla_tiles/
-├── singapore/
-│   └── 2/                  # Zoom level 2 (required)
-│       ├── 000/
-│       │   ├── 000.gph
-│       │   ├── 001.gph
-│       │   └── ...
-│       ├── 001/
-│       └── ...
-└── thailand/               # Optional: additional regions
-    └── 2/
-        └── ...
+data/valhalla_tiles/
+└── singapore/
+    ├── latest -> v20260315-071546/   # symlink to current version
+    └── v20260315-071546/             # versioned tile dir (created by pipeline)
+        ├── 0/                        # hierarchy level 0
+        ├── 1/                        # hierarchy level 1
+        └── 2/                        # hierarchy level 2
+            ├── 000/
+            │   ├── 000.gph
+            │   └── ...
+            └── ...
+```
+
+Point `VALHALLA_TILE_DIR` at the versioned dir or the `latest` symlink:
+```bash
+export VALHALLA_TILE_DIR=data/valhalla_tiles/singapore/latest
 ```
 
 ---
@@ -187,24 +158,15 @@ valhalla_tiles/
 ### Test Simple Routing
 ```bash
 cd simple-routing
-export VALHALLA_TILES_DIR=../../data/valhalla_tiles
+export VALHALLA_TILE_DIR=../../data/valhalla_tiles/singapore/latest
 ./gradlew run
 ```
 
 ### Test Multiple Regions
 ```bash
 cd multiple-regions
-export VALHALLA_TILES_DIR=../../data/valhalla_tiles
+export VALHALLA_TILE_DIR=../../data/valhalla_tiles
 ./gradlew run
-```
-
-### Test Docker
-```bash
-cd docker-example
-docker build -t valhalla-test .
-docker run --rm \
-  -v $(pwd)/../../data/valhalla_tiles/singapore:/tiles:ro \
-  valhalla-test
 ```
 
 ---
@@ -214,8 +176,8 @@ docker run --rm \
 ### "Tiles not found"
 ```bash
 # Check tile directory
-echo $VALHALLA_TILES_DIR
-ls -la $VALHALLA_TILES_DIR/singapore/2
+echo $VALHALLA_TILE_DIR
+ls -la $VALHALLA_TILE_DIR/singapore/2
 
 # Validate tiles
 cd simple-routing
@@ -233,7 +195,7 @@ cd ../src/bindings/java
 ```bash
 # Check tile structure
 # Must have: tiles/singapore/2/000/000.gph
-find $VALHALLA_TILES_DIR -name "*.gph" | head -5
+find $VALHALLA_TILE_DIR -name "*.gph" | head -5
 ```
 
 ---
@@ -288,8 +250,7 @@ suspend fun routeAsync() {
 |----------|---------|---------------|
 | Local Development | simple-routing | Default paths |
 | Multi-Region Service | multiple-regions | Env variable |
-| Container Deployment | docker-example | Volume mount |
-| Kubernetes | docker-example | PVC mount |
+| Container Deployment | Use `docker/Dockerfile.prod` | Volume mount `-v /host/tiles:/tiles` |
 | Lambda/Serverless | simple-routing | EFS mount |
 
 ---
@@ -299,20 +260,18 @@ suspend fun routeAsync() {
 1. **Try Simple Example:**
    ```bash
    cd simple-routing
-   export VALHALLA_TILES_DIR=../../data/valhalla_tiles
-   gradle run
+   export VALHALLA_TILE_DIR=../../data/valhalla_tiles/singapore/latest
+   ./gradlew run
    ```
 
 2. **Modify for Your Region:**
    - Update coordinates in examples
-   - Change region name
-   - Test with your tiles
+   - Change region name in `regions` list
+   - Run pipeline: `bash deploy/scripts/run-tile-pipeline.sh <region>`
 
 3. **Production Deployment:**
-   - Use Docker example as template
-   - Add proper HTTP framework (Ktor, Spring Boot)
-   - Implement authentication
-   - Set up monitoring
+   - Build image: `docker build -f docker/Dockerfile.prod -t valhalla:local .`
+   - Mount tiles: `docker run -v /host/tiles:/tiles -e VALHALLA_TILE_DIR=/tiles valhalla:local`
 
 ---
 
