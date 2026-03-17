@@ -14,7 +14,7 @@ on:
       - ".tx"
       - ".git*"
     branches:
-      - master
+      - _disabled
   pull_request:
     paths-ignore:
       - "*.md"

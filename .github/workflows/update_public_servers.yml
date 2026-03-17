@@ -3,7 +3,7 @@ name: Update public FOSSGIS servers
 on:
   push:
     branches:
-      - master
+      - _disabled
     paths:
       - '.github/workflows/**'
       - 'src/**'
