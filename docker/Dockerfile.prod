@@ -22,6 +22,9 @@
 # ============================================
 FROM ubuntu:22.04 AS builder
 
+# Expose Docker's automatic build architecture variable (amd64 / arm64)
+ARG TARGETARCH
+
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -55,7 +58,7 @@ RUN apt-get update && apt-get install -y \
 RUN apt-get update && apt-get install -y --fix-missing openjdk-17-jdk \
     && rm -rf /var/lib/apt/lists/*
 
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-${TARGETARCH}
 
 # Set working directory
 WORKDIR /build
@@ -116,14 +119,16 @@ RUN DEST=src/bindings/java/src/main/resources/lib/linux-amd64 && \
 # ── Step D: Build native JNI library with CMake ──────────────────────────────
 # Runs from src/bindings/java/ — cmake -S . points at src/bindings/java/CMakeLists.txt
 # Proto headers are at /build/build/src/valhalla/proto (VALHALLA_SOURCE_DIR=/build)
-RUN cd src/bindings/java && \
+RUN JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac)))) && \
+    echo "Using JAVA_HOME=${JAVA_HOME}" && \
+    cd src/bindings/java && \
     mkdir -p build && \
     cmake -B build -S . \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_C_COMPILER=gcc-13 \
       -DCMAKE_CXX_COMPILER=g++-13 \
       -DVALHALLA_SOURCE_DIR=/build \
-      -DJAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 && \
+      -DJAVA_HOME="${JAVA_HOME}" && \
     cmake --build build --config Release -j"$(nproc)" && \
     echo "✅ libvalhalla_jni.so built"
 
