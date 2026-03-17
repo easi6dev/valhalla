@@ -142,7 +142,8 @@ RUN cp src/bindings/java/build/libs/native/libvalhalla_jni.so \
 # ── Step F: Copy libprotobuf-lite.so.23 into resources ──────────────────────
 # Ubuntu 22.04 ships libprotobuf-lite.so.23 — matches what is already committed
 # under resources/lib/linux-amd64/. Pick the versioned file directly.
-RUN lib=$(ls /usr/lib/x86_64-linux-gnu/libprotobuf-lite.so.[0-9]* 2>/dev/null | head -1) && \
+RUN MULTIARCH=$(gcc-13 -print-multiarch) && \
+    lib=$(ls /usr/lib/${MULTIARCH}/libprotobuf-lite.so.[0-9]* 2>/dev/null | head -1) && \
     if [ -n "$lib" ]; then \
         cp "$lib" src/bindings/java/src/main/resources/lib/linux-amd64/ && \
         echo "✅ $(basename $lib) copied"; \
