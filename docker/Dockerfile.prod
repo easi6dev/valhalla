@@ -73,6 +73,8 @@ RUN cmake -B build-tiles \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_C_COMPILER=gcc-13 \
       -DCMAKE_CXX_COMPILER=g++-13 \
+      -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
       -DBUILD_SHARED_LIBS=ON \
       -DENABLE_TESTS=OFF \
       -DENABLE_SERVICES=OFF \
