@@ -65,6 +65,14 @@ test_requests/
 # docker
 Dockerfile
 
+# Large data/build directories not needed in Docker build context
+data/
+logs/
+src/bindings/java/build/
+src/bindings/java/.gradle/
+.gradle/
+build/
+
 # CI
 .github/
 .circleci/

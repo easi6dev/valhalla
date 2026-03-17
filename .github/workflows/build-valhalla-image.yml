@@ -1,0 +1,135 @@
+name: Build valhalla Image
+
+on:
+  push:
+    branches: [master, development, test, staging]
+    paths:
+      - 'src/**'
+      - 'proto/**'
+      - 'valhalla/**'
+      - 'cmake/**'
+      - 'third_party/**'
+      - 'CMakeLists.txt'
+      - 'libvalhalla.pc.in'
+      - 'docker/Dockerfile.prod'
+      - 'config/**'
+      - '.github/workflows/build-valhalla-image.yml'
+  workflow_dispatch:
+    inputs:
+      push_latest:
+        description: 'Also tag and push as :latest'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+concurrency:
+  group: build-valhalla-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ECR_ACCOUNT_ID: "633107344074"
+  ECR_REGISTRY: 633107344074.dkr.ecr.ap-southeast-1.amazonaws.com
+  ECR_REPOSITORY: valhalla
+  AWS_REGION: ap-southeast-1
+
+jobs:
+  build-and-push:
+    runs-on: mvlchain-runner-large
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Determine image tags
+        id: tags
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          BRANCH=$(echo "${GITHUB_REF_NAME}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+          IMAGE_BASE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}"
+
+          # Always produce branch + short SHA (immutable, traceable) and branch (mutable, latest for branch)
+          TAG_SHA="${IMAGE_BASE}:${BRANCH}-${SHORT_SHA}"
+          TAG_BRANCH="${IMAGE_BASE}:${BRANCH}"
+          TAGS="${TAG_SHA},${TAG_BRANCH}"
+
+          # :latest only on explicit workflow_dispatch with push_latest=true
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.push_latest }}" == "true" ]]; then
+            TAGS="${TAGS},${IMAGE_BASE}:latest"
+          fi
+
+          echo "tags=${TAGS}"               >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}"     >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}"           >> "$GITHUB_OUTPUT"
+          echo "image_base=${IMAGE_BASE}"   >> "$GITHUB_OUTPUT"
+          echo "tag_sha=${TAG_SHA}"         >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registries: ${{ env.ECR_ACCOUNT_ID }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.prod
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=valhalla-multi
+          cache-to: type=gha,mode=max,scope=valhalla-multi
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.ref.name=${{ steps.tags.outputs.branch }}
+
+      - name: Verify image — JAR and native libs present
+        run: |
+          IMAGE="${{ steps.tags.outputs.tag_sha }}"
+          docker pull "${IMAGE}"
+
+          echo "--- Verifying JAR exists ---"
+          docker run --rm "${IMAGE}" sh -c "ls -lh /app/valhalla-jni.jar"
+
+          echo "--- Verifying native libs bundled in JAR ---"
+          docker run --rm "${IMAGE}" sh -c "unzip -l /app/valhalla-jni.jar | grep '\.so'"
+
+      - name: Summary
+        run: |
+          echo "## Valhalla Image Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | \`${{ steps.tags.outputs.branch }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | \`${{ steps.tags.outputs.short_sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Registry | \`${{ env.ECR_REGISTRY }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Repository | \`${{ env.ECR_REPOSITORY }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Dockerfile | \`docker/Dockerfile.prod\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Tags pushed:**" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.tags.outputs.tags }}" | tr ',' '\n' >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**To use this image for JNI JAR extraction:**" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`bash" >> "$GITHUB_STEP_SUMMARY"
+          echo "docker run --rm -v \$(pwd)/output:/out \\" >> "$GITHUB_STEP_SUMMARY"
+          echo "  ${{ steps.tags.outputs.tag_sha }} \\" >> "$GITHUB_STEP_SUMMARY"
+          echo "  sh -c 'cp /app/valhalla-jni.jar /out/'" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**To use this image for tile building:**" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`bash" >> "$GITHUB_STEP_SUMMARY"
+          echo "VALHALLA_DOCKER_IMAGE=${{ steps.tags.outputs.tag_sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"

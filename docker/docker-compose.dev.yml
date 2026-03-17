@@ -1,0 +1,64 @@
+# ============================================
+# Valhalla JNI — Local Dev Override
+# ============================================
+# Overrides docker-compose.yml for local development on WSL2.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
+#
+# This file ONLY contains values that differ from the base compose file.
+# ============================================
+
+services:
+  valhalla-jni:
+
+    # Use locally built image tag instead of :latest
+    image: valhalla-jni:dev
+
+    container_name: valhalla-jni-dev
+
+    # Volume mounts — point to local project tile data
+    volumes:
+      # Tiles built in Step 4 — relative to project root (one level above docker/)
+      - ../data/valhalla_tiles:/var/valhalla/tiles:ro
+
+      # Logs written to local directory instead of named volume (easier to inspect)
+      - ../logs/valhalla:/var/log/valhalla
+
+      # Config (same as prod)
+      - ../config:/app/config:ro
+
+    # Dev environment variables
+    environment:
+      - VALHALLA_ENV=dev
+      - VALHALLA_TILE_DIR=/var/valhalla/tiles
+      # Reduced heap for local machine
+      - JAVA_OPTS=-Xmx2g -Xms512m -XX:+UseG1GC -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/valhalla/heap-dump.hprof -Dvalhalla.env=dev
+
+    # Reduced resource limits for local dev
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+    # More lenient health check for slower local startup
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+
+    # Do not auto-restart in dev — fail fast so errors are visible
+    restart: "no"
+
+    # Human-readable logs in dev instead of json-file
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"

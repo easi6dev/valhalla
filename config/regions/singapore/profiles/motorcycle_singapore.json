@@ -1,0 +1,68 @@
+{
+  "costing": "motorcycle",
+  "name": "Singapore Motorcycle Profile",
+  "description": "Optimized motorcycle routing profile for Singapore with lane and parking restrictions",
+  "costing_options": {
+    "motorcycle": {
+      "maneuver_penalty": 5,
+      "gate_cost": 30,
+      "gate_penalty": 300,
+      "private_access_penalty": 450,
+      "toll_booth_cost": 15,
+      "toll_booth_penalty": 0,
+      "ferry_cost": 300,
+      "use_ferry": 0.5,
+      "use_highways": 1.0,
+      "use_tolls": 1.0,
+      "use_living_streets": 0.8,
+      "use_tracks": 0.3,
+      "service_penalty": 10,
+      "service_factor": 1.0,
+      "country_crossing_cost": 600,
+      "country_crossing_penalty": 1.5,
+      "shortest": false,
+      "exclude_unpaved": false,
+      "top_speed": 90,
+      "fixed_speed": 0,
+      "ignore_restrictions": false,
+      "ignore_oneways": false,
+      "ignore_access": false,
+      "ignore_closures": false,
+      "closure_factor": 9.0,
+      "use_trails": 0.5
+    }
+  },
+  "region_specific": {
+    "erp_zones": {
+      "enabled": true,
+      "description": "Electronic Road Pricing zones - motorcycles exempted in some cases",
+      "peak_hours": ["08:00-09:30", "18:00-20:00"],
+      "cost_multiplier": 0.8,
+      "exemptions": ["Below 400cc during off-peak"]
+    },
+    "lane_restrictions": {
+      "enabled": true,
+      "description": "Bus lane restrictions for motorcycles",
+      "bus_lane_penalty": 900,
+      "restricted_hours": ["07:30-09:30", "17:00-20:00"]
+    },
+    "parking_restrictions": {
+      "enabled": true,
+      "description": "HDB and public parking restrictions",
+      "hdb_parking_penalty": 300,
+      "public_parking_cost": 0.65
+    },
+    "speed_limits": {
+      "expressway": 90,
+      "arterial": 70,
+      "urban": 50,
+      "residential": 40,
+      "school_zone": 40
+    },
+    "turn_restrictions": {
+      "no_left_turn_penalty": 600,
+      "no_right_turn_penalty": 600,
+      "no_u_turn_penalty": 900
+    }
+  }
+}

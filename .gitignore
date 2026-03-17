@@ -25,11 +25,38 @@ CMakeLists.txt.user
 /.vs*/
 /*build*/
 /CMakeSettings.json
-.idea
+# IntelliJ IDEA
+.idea/*
+!.idea/modules.xml
+!.idea/misc.xml
+!.idea/gradle.xml
+*.iws
+out/
 /.tidytmp
 vcpkg*/
 *.log
 custom_files/
+
+# Gradle
+.gradle/
+**/build/
+!src/**/build/*.gradle
+*.gradle.kts.swp
+
+# Gradle build reports and generated files
+**/build/reports/
+**/build/test-results/
+**/build/jmh-results/
+**/build/distributions/
+**/build/libs/*.jar
+!**/build/libs/*-all.jar
+
+# Java bindings
+src/bindings/java/.gradle/
+src/bindings/java/build/
+!src/bindings/java/build.gradle.kts
+*.iml
+!valhalla.iml
 
 # python
 .venv
@@ -49,3 +76,72 @@ src/bindings/python/valhalla/__version__.py
 **/*.egg-info
 dist
 wheelhouse
+
+# temporary files
+temp/
+.temp/
+
+# OSM data files and generated tiles
+data/
+
+# Pipeline config files (contain local/env-specific paths — never commit)
+deploy/config/pipeline.local.conf
+deploy/config/pipeline.dev.conf
+deploy/config/pipeline.test.conf
+deploy/config/pipeline.staging.conf
+deploy/config/pipeline.prod.conf
+
+# Compiled native libraries (binaries should not be committed)
+*.so
+*.so.*
+*.dll
+*.dylib
+src/bindings/java/src/main/resources/lib/**/*.so
+src/bindings/java/src/main/resources/lib/**/*.so.*
+src/bindings/java/src/main/resources/lib/**/*.dll
+src/bindings/java/src/main/resources/lib/**/*.dylib
+
+# Gradle wrapper JAR
+# Note: gradle-wrapper.jar is allowed in src/bindings/java/.gitignore
+# It's a standard practice to commit it for reproducible builds
+gradle/wrapper/gradle-wrapper.jar
+
+# Test files (temporary)
+src/bindings/java/src/test/kotlin/global/tada/valhalla/MinimalTest.kt
+test-config.kt
+nul
+
+# JMH benchmark results
+**/jmh-result*.json
+**/jmh-result*.txt
+jmh-result.json
+
+# Load test results
+**/load-test-results/
+load-test-*.log
+
+# Claude Code temporary files
+.claude/test_status.ps1
+.claude/status_debug.log
+.claude/
+.claude-flow/
+
+# IDE module files (keep project-level config only)
+*.iml
+!valhalla.iml
+
+# Gradle caches
+src/bindings/java/gradle-8.5/
+/.idea/gradle.xml
+/gradle/wrapper/gradle-wrapper.jar
+/gradle/wrapper/gradle-wrapper.properties
+/gradlew
+/gradlew.bat
+/.idea/misc.xml
+/src/bindings/nodejs/package-lock.json
+/.claude/settings.local.json
+/.claude/status_line_command.ps1
+/.claude/status_line_command.sh
+/.claude/STATUS_LINE_README.md
+/.mcp.json
+/CLAUDE.md

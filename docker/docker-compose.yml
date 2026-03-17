@@ -1,0 +1,115 @@
+# ============================================
+# Valhalla JNI Docker Compose Configuration
+# ============================================
+# Production-ready Valhalla JNI routing service
+#
+# Usage:
+#   docker-compose up -d
+#   docker-compose logs -f valhalla-jni
+#   docker-compose down
+#
+# Note: Monitoring via Datadog (see deployment docs)
+# ============================================
+
+version: '3.8'
+
+services:
+  # ============================================
+  # Valhalla JNI Routing Service
+  # ============================================
+  valhalla-jni:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.prod
+    image: valhalla-jni:latest
+    container_name: valhalla-jni
+    hostname: valhalla-jni
+
+    # Port mapping
+    ports:
+      - "8080:8080"  # HTTP API
+
+    # Volume mounts
+    volumes:
+      # Tile data (read-only)
+      # Replace /mnt/tiles with your actual tile directory
+      - /mnt/tiles:/var/valhalla/tiles:ro
+
+      # Logs (persistent)
+      - valhalla-logs:/var/log/valhalla
+
+      # Configuration (read-only)
+      - ../config:/app/config:ro
+
+    # Environment variables
+    environment:
+      - VALHALLA_ENV=prod
+      - VALHALLA_TILE_DIR=/var/valhalla/tiles
+      - JAVA_OPTS=-Xmx4g -Xms2g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+    # Network
+    networks:
+      - valhalla-net
+
+  # ============================================
+  # Nginx (Optional: Reverse Proxy)
+  # ============================================
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: nginx
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/nginx/ssl:ro
+  #   networks:
+  #     - valhalla-net
+  #   depends_on:
+  #     - valhalla-jni
+  #   restart: unless-stopped
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  valhalla-logs:
+    driver: local
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  valhalla-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

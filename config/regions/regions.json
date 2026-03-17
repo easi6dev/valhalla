@@ -1,0 +1,90 @@
+{
+  "regions": {
+    "singapore": {
+      "name": "Singapore",
+      "enabled": true,
+      "osm_source": "https://download.geofabrik.de/asia/malaysia-singapore-brunei-latest.osm.pbf",
+      "bounds": {
+        "min_lat": 1.15,
+        "max_lat": 1.48,
+        "min_lon": 103.6,
+        "max_lon": 104.0
+      },
+      "tile_dir": "singapore",
+      "default_costing": "auto",
+      "supported_costings": ["auto", "bicycle",  "motorcycle", "taxi"],
+      "costing_options": {
+        "auto": {
+          "maneuver_penalty": 5,
+          "country_crossing_penalty": 600,
+          "ferry_cost": 300,
+          "use_ferry": 0.5,
+          "shortest": false,
+          "speed_types": ["freeflow", "constrained", "predicted", "current"],
+          "top_speed": 90
+        },
+        "motorcycle": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 1.0,
+          "top_speed": 90
+        },
+        "taxi": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 1.0,
+          "top_speed": 90
+        }
+      },
+      "timezone": "Asia/Singapore",
+      "locale": "en-SG",
+      "currency": "SGD"
+    },
+    "thailand": {
+      "name": "Thailand",
+      "enabled": false,
+      "osm_source": "https://download.geofabrik.de/asia/thailand-latest.osm.pbf",
+      "bounds": {
+        "min_lat": 5.61,
+        "max_lat": 20.46,
+        "min_lon": 97.34,
+        "max_lon": 105.64
+      },
+      "tile_dir": "thailand",
+      "default_costing": "auto",
+      "supported_costings": ["auto", "bicycle", "pedestrian", "motorcycle", "bus", "truck"],
+      "costing_options": {
+        "auto": {
+          "maneuver_penalty": 5,
+          "country_crossing_penalty": 600,
+          "ferry_cost": 300,
+          "use_ferry": 0.5,
+          "shortest": false,
+          "speed_types": ["urban", "rural"]
+        },
+        "motorcycle": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 0.8
+        }
+      },
+      "timezone": "Asia/Bangkok",
+      "locale": "th-TH",
+      "currency": "THB"
+    }
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "last_updated": "2026-02-24",
+    "description": "Multi-region configuration for Valhalla routing engine with JNI bindings",
+    "tile_dir_config": {
+      "description": "Configure tile directory root via VALHALLA_TILE_DIR environment variable",
+      "default": "data/valhalla_tiles",
+      "examples": {
+        "development": "/var/valhalla_tiles",
+        "production": "/var/valhalla/tiles",
+        "staging": "/var/valhalla/tiles"
+      }
+    }
+  }
+}

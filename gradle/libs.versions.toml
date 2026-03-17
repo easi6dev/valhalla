@@ -1,0 +1,87 @@
+# ============================================
+# Valhalla JNI Dependencies Version Catalog
+# ============================================
+# Centralized dependency version management using Gradle Version Catalog
+# Benefits:
+# - Single source of truth for all versions
+# - Easy to update versions across the project
+# - Type-safe dependency accessors
+# - Better IDE support
+#
+# Usage in build.gradle.kts:
+#   dependencies {
+#       implementation(libs.kotlin.stdlib)
+#       implementation(libs.kotlinx.coroutines.core)
+#   }
+# ============================================
+
+[versions]
+# Language versions
+kotlin = "1.9.25"
+java = "17"
+
+# Core dependencies
+kotlinx-coroutines = "1.8.1"
+slf4j = "2.0.13"
+logback = "1.5.6"
+json = "20240303"
+
+# Testing
+junit = "5.10.3"
+assertj = "3.26.3"
+
+# Build tools
+gradle-kotlin-dsl = "4.4.1"
+dokka = "1.9.20"
+
+# Code quality
+detekt = "1.23.6"
+
+# Performance
+jmh = "1.37"
+jmh-gradle = "0.7.2"
+
+[libraries]
+# Kotlin
+kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
+kotlin-reflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-jdk8 = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-jdk8", version.ref = "kotlinx-coroutines" }
+
+# Logging
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+# JSON
+json = { module = "org.json:json", version.ref = "json" }
+
+# Testing
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit" }
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
+assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+
+# Performance benchmarking
+jmh-core = { module = "org.openjdk.jmh:jmh-core", version.ref = "jmh" }
+jmh-generator-annprocess = { module = "org.openjdk.jmh:jmh-generator-annprocess", version.ref = "jmh" }
+
+[bundles]
+# Common dependency bundles
+kotlin = ["kotlin-stdlib", "kotlin-reflect", "kotlinx-coroutines-core"]
+logging = ["slf4j-api", "logback-classic"]
+testing = ["kotlin-test", "kotlin-test-junit", "junit-jupiter", "assertj-core"]
+jmh = ["jmh-core", "jmh-generator-annprocess"]
+[plugins]
+# Kotlin
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+
+# Documentation
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
+
+# Code quality
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
+
+# Performance
+jmh = { id = "me.champeau.jmh", version.ref = "jmh-gradle" }

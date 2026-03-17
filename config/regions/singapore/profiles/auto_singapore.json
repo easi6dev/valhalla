@@ -1,0 +1,64 @@
+{
+  "costing": "auto",
+  "name": "Singapore Car Profile",
+  "description": "Optimized car routing profile for Singapore with ERP and CBD considerations",
+  "costing_options": {
+    "auto": {
+      "maneuver_penalty": 5,
+      "gate_cost": 30,
+      "gate_penalty": 300,
+      "private_access_penalty": 450,
+      "toll_booth_cost": 15,
+      "toll_booth_penalty": 0,
+      "ferry_cost": 300,
+      "use_ferry": 0.5,
+      "use_highways": 1.0,
+      "use_tolls": 1.0,
+      "use_living_streets": 0.5,
+      "use_tracks": 0,
+      "service_penalty": 15,
+      "service_factor": 1.0,
+      "country_crossing_cost": 600,
+      "country_crossing_penalty": 1.5,
+      "shortest": false,
+      "exclude_unpaved": true,
+      "exclude_cash_only_tolls": false,
+      "top_speed": 90,
+      "fixed_speed": 0,
+      "ignore_restrictions": false,
+      "ignore_oneways": false,
+      "ignore_access": false,
+      "ignore_closures": false,
+      "closure_factor": 9.0,
+      "speed_types": ["freeflow", "constrained", "predicted", "current"],
+      "flow_mask": 3
+    }
+  },
+  "region_specific": {
+    "erp_zones": {
+      "enabled": true,
+      "description": "Electronic Road Pricing zones in Singapore CBD",
+      "peak_hours": ["08:00-09:30", "18:00-20:00"],
+      "cost_multiplier": 1.2,
+      "affected_areas": ["CBD", "Orchard", "Marina"]
+    },
+    "cbd_restrictions": {
+      "enabled": true,
+      "description": "Central Business District vehicle restrictions",
+      "restricted_hours": ["07:30-19:00"],
+      "restricted_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    },
+    "speed_limits": {
+      "expressway": 90,
+      "arterial": 70,
+      "urban": 50,
+      "residential": 40,
+      "school_zone": 40
+    },
+    "turn_restrictions": {
+      "no_left_turn_penalty": 600,
+      "no_right_turn_penalty": 600,
+      "no_u_turn_penalty": 900
+    }
+  }
+}
