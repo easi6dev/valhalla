@@ -97,14 +97,19 @@ RUN mkdir -p build/src/valhalla/proto && \
       --cpp_out=build/src/valhalla/proto \
       proto/*.proto
 
-# ── Step C: Ensure libvalhalla.so.3 and libvalhalla.so exist in resources ───
-# Symlinks are stripped by NTFS on Windows hosts — copy versioned file under
-# all three names so Gradle bundles all entries into the JAR.
-# Version 3.6.2 confirmed from valhalla/valhalla.h.
-RUN cd src/bindings/java/src/main/resources/lib/linux-amd64 && \
-    cp -n libvalhalla.so.3.6.2 libvalhalla.so.3 && \
-    cp -n libvalhalla.so.3.6.2 libvalhalla.so && \
-    ls -la
+# ── Step C: Populate libvalhalla.so* in resources from the build output ─────
+# *.so / *.so.* are gitignored so they are absent from the build context.
+# Copy the versioned library built in Step A (installed to /usr/local/lib/)
+# under all three names so Gradle bundles all entries into the JAR.
+RUN DEST=src/bindings/java/src/main/resources/lib/linux-amd64 && \
+    VERSIONED=$(ls /usr/local/lib/libvalhalla.so.[0-9]* 2>/dev/null | sort -V | tail -1) && \
+    if [ -z "$VERSIONED" ]; then echo "❌ libvalhalla.so.* not found in /usr/local/lib/" && exit 1; fi && \
+    SONAME=$(basename "$VERSIONED") && \
+    cp "$VERSIONED" "$DEST/$SONAME" && \
+    cp "$VERSIONED" "$DEST/libvalhalla.so.3" && \
+    cp "$VERSIONED" "$DEST/libvalhalla.so" && \
+    echo "✅ $SONAME copied as libvalhalla.so.3 and libvalhalla.so" && \
+    ls -la "$DEST"
 
 # ── Step D: Build native JNI library with CMake ──────────────────────────────
 # Runs from src/bindings/java/ — cmake -S . points at src/bindings/java/CMakeLists.txt
