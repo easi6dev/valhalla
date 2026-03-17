@@ -70,6 +70,7 @@ RUN cmake -B build-tiles \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_C_COMPILER=gcc-13 \
       -DCMAKE_CXX_COMPILER=g++-13 \
+      -DBUILD_SHARED_LIBS=ON \
       -DENABLE_TESTS=OFF \
       -DENABLE_SERVICES=OFF \
       -DENABLE_PYTHON_BINDINGS=OFF \
@@ -77,10 +78,11 @@ RUN cmake -B build-tiles \
       -DENABLE_JAVA_BINDINGS=OFF \
       -DENABLE_SINGLE_FILES_WERROR=OFF \
     && cmake --build build-tiles \
-         --target valhalla_build_tiles valhalla_build_admins \
+         --target valhalla valhalla_build_tiles valhalla_build_admins \
          -j"$(nproc)" \
     && cp build-tiles/valhalla_build_tiles build-tiles/valhalla_build_admins /usr/local/bin/ \
     && find build-tiles -name 'libvalhalla*.so*' -exec cp {} /usr/local/lib/ \; \
+    && ldconfig \
     && mkdir -p /usr/local/share/valhalla \
     && echo "✅ valhalla_build_tiles + valhalla_build_admins installed"
 
