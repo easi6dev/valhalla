@@ -175,11 +175,17 @@ jobs:
           IMAGE="${{ needs.prepare.outputs.tag_sha }}"
           docker pull "${IMAGE}"
 
-          echo "--- Verifying JAR exists ---"
-          docker run --rm "${IMAGE}" sh -c "ls -lh /app/valhalla-jni.jar"
+          echo "--- Verifying JAR exists and checking size ---"
+          JAR_SIZE=$(docker run --rm "${IMAGE}" sh -c "ls -lh /app/valhalla-jni.jar")
+          echo "${JAR_SIZE}"
+          SIZE_BYTES=$(docker run --rm "${IMAGE}" sh -c "stat -c%s /app/valhalla-jni.jar")
+          if [ "${SIZE_BYTES}" -lt 1048576 ]; then
+            echo "❌ JAR is suspiciously small (${SIZE_BYTES} bytes) — build may have failed" && exit 1
+          fi
+          echo "✅ JAR size OK: ${SIZE_BYTES} bytes"
 
           echo "--- Verifying native libs bundled in JAR ---"
-          docker run --rm "${IMAGE}" sh -c "unzip -l /app/valhalla-jni.jar | grep '\.so'"
+          docker run --rm "${IMAGE}" sh -c "python3 -c \"import zipfile; entries=[e for e in zipfile.ZipFile('/app/valhalla-jni.jar').namelist() if e.endswith('.so') or '.so.' in e]; [print(e) for e in entries]; exit(0 if entries else 1)\""
 
       - name: Summary
         run: |
