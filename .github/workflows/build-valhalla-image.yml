@@ -82,9 +82,10 @@ jobs:
           - platform: linux/amd64
             arch: amd64
             runner: mvlchain-runner-large
-          - platform: linux/arm64
-            arch: arm64
-            runner: mvlchain-runner-large
+          # arm64 temporarily disabled — QEMU emulation too slow (>1hr); re-enable when native arm64 runner is available
+          # - platform: linux/arm64
+          #   arch: arm64
+          #   runner: mvlchain-runner-large
 
     steps:
       - uses: actions/checkout@v4
