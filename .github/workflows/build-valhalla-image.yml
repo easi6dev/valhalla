@@ -179,7 +179,7 @@ jobs:
           docker run --rm "${IMAGE}" sh -c "ls -lh /app/valhalla-jni.jar"
 
           echo "--- Verifying native libs bundled in JAR ---"
-          docker run --rm "${IMAGE}" sh -c "jar tf /app/valhalla-jni.jar | grep '\.so'"
+          docker run --rm "${IMAGE}" sh -c "unzip -l /app/valhalla-jni.jar | grep '\.so'"
 
       - name: Summary
         run: |
