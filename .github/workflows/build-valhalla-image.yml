@@ -185,7 +185,7 @@ jobs:
           echo "✅ JAR size OK: ${SIZE_BYTES} bytes"
 
           echo "--- Verifying native libs bundled in JAR ---"
-          docker run --rm "${IMAGE}" sh -c "python3 -c \"import zipfile; entries=[e for e in zipfile.ZipFile('/app/valhalla-jni.jar').namelist() if e.endswith('.so') or '.so.' in e]; [print(e) for e in entries]; exit(0 if entries else 1)\""
+          docker run --rm "${IMAGE}" sh -c "unzip -l /app/valhalla-jni.jar | grep '\.so'"
 
       - name: Summary
         run: |

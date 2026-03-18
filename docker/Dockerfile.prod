@@ -191,7 +191,7 @@ RUN apt-get update && apt-get install -y \
     libzmq5 libczmq4 \
     zlib1g \
     # Tile pipeline utilities
-    jq wget curl ca-certificates \
+    jq wget curl ca-certificates unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy tile builder binaries + shared libs from builder
