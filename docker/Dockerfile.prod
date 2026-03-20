@@ -191,8 +191,16 @@ RUN apt-get update && apt-get install -y \
     libzmq5 libczmq4 \
     zlib1g \
     # Tile pipeline utilities
-    jq wget curl ca-certificates unzip \
+    jq wget curl ca-certificates unzip python3 \
     && rm -rf /var/lib/apt/lists/*
+
+# Install AWS CLI v2 — required for S3 sync in the tile pipeline.
+# Done in a separate layer so an AWS CLI update doesn't bust the apt cache layer.
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/awscliv2.zip /tmp/aws \
+    && aws --version
 
 # Copy tile builder binaries + shared libs from builder
 COPY --from=builder /usr/local/bin/valhalla_build_tiles  /usr/local/bin/
@@ -207,13 +215,28 @@ RUN valhalla_build_tiles  --version 2>&1 | head -1 \
  && valhalla_build_admins --version 2>&1 | head -1 \
  && echo "✅ tile binaries verified in runtime stage"
 
+# Embed the tile generation pipeline script.
+# Placed at /app/deploy/scripts/ so that the script's PROJECT_ROOT resolution
+# (SCRIPT_DIR/../.. = /app) correctly locates /app/config/regions/ at runtime.
+# A convenience symlink at /usr/local/bin/ makes it easy to invoke by name.
+COPY deploy/scripts/run-tile-pipeline.sh /app/deploy/scripts/run-tile-pipeline.sh
+RUN chmod +x /app/deploy/scripts/run-tile-pipeline.sh \
+    && ln -s /app/deploy/scripts/run-tile-pipeline.sh /usr/local/bin/run-tile-pipeline.sh
+
+# Embed deploy configs (pipeline .conf files) so the pipeline can source them
+# without a separate mount. The script auto-detects pipeline.{env}.conf.
+COPY deploy/config/ /app/deploy/config/
+
 # Create non-root user
 RUN useradd -m -s /bin/bash valhalla && \
     mkdir -p /var/valhalla/tiles /var/log/valhalla /app \
-             /valhalla/tiles /valhalla/osm /valhalla/admin /valhalla/config && \
+             /valhalla/tiles /valhalla/osm /valhalla/admin /valhalla/config \
+             /mnt/efs/valhalla_tiles /mnt/efs/valhalla_osm /mnt/efs/valhalla_admin && \
     chown -R valhalla:valhalla /var/valhalla /var/log/valhalla /app
 
-# Copy JNI JAR and config from builder
+# Copy JNI JAR and config from builder.
+# config/ includes regions/regions.json and valhalla-{region}.json — used by
+# run-tile-pipeline.sh at runtime to resolve OSM sources and build configs.
 COPY --from=builder --chown=valhalla:valhalla \
     /build/src/bindings/java/build/libs/valhalla-jni-1.0.0-SNAPSHOT.jar \
     /app/valhalla-jni.jar
@@ -223,6 +246,8 @@ COPY --from=builder --chown=valhalla:valhalla \
     /app/config
 
 # Environment
+# VALHALLA_ENV drives which pipeline.{env}.conf the script auto-detects at
+# /app/deploy/config/pipeline.prod.conf (PROJECT_ROOT = /app via symlink layout).
 ENV VALHALLA_ENV=prod \
     VALHALLA_TILE_DIR=/var/valhalla/tiles \
     JAVA_HOME=/opt/java/openjdk \
