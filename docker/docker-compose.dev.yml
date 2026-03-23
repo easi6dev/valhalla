@@ -10,12 +10,12 @@
 # ============================================
 
 services:
-  valhalla-jni:
+  valhalla:
 
     # Use locally built image tag instead of :latest
-    image: valhalla-jni:dev
+    image: valhalla:dev
 
-    container_name: valhalla-jni-dev
+    container_name: valhalla-dev
 
     # Volume mounts — point to local project tile data
     volumes:
