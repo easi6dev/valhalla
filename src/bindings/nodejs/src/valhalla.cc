@@ -13,6 +13,9 @@
 #include <unordered_map>
 #include <utility>
 
+// Defined in graph_id.cc
+Napi::Object InitGraphId(Napi::Env env, Napi::Object exports);
+
 namespace vt = valhalla::tyr;
 
 namespace {
@@ -40,13 +43,7 @@ const boost::property_tree::ptree configure(const std::string& config) {
     std::stringstream stream(config);
     rapidjson::read_json(stream, pt);
 
-    auto logging_subtree = pt.get_child_optional("mjolnir.logging");
-    if (logging_subtree) {
-      auto logging_config = valhalla::midgard::ToMap<const boost::property_tree::ptree&,
-                                                     std::unordered_map<std::string, std::string>>(
-          logging_subtree.get());
-      valhalla::midgard::logging::Configure(logging_config);
-    }
+    valhalla::midgard::logging::ConfigureFromPtree(pt);
   } catch (...) { throw std::runtime_error("Failed to load config"); }
 
   return pt;
@@ -289,6 +286,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::String::New(env, VALHALLA_PRINT_VERSION));
 
   Actor::Init(env, exports);
+  InitGraphId(env, exports);
   return exports;
 }
 

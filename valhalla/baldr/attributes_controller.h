@@ -59,6 +59,8 @@ constexpr std::string_view kEdgeTransitRouteInfoOperatorName =
 constexpr std::string_view kEdgeTransitRouteInfoOperatorUrl = "edge.transit_route_info.operator_url";
 constexpr std::string_view kEdgeId = "edge.id";
 constexpr std::string_view kEdgeWayId = "edge.way_id";
+constexpr std::string_view kEdgeBeginOsmNodeId = "edge.begin_osm_node_id";
+constexpr std::string_view kEdgeEndOsmNodeId = "edge.end_osm_node_id";
 constexpr std::string_view kEdgeWeightedGrade = "edge.weighted_grade";
 constexpr std::string_view kEdgeMaxUpwardGrade = "edge.max_upward_grade";
 constexpr std::string_view kEdgeMaxDownwardGrade = "edge.max_downward_grade";
@@ -204,6 +206,7 @@ constexpr std::string_view kShapeAttributesLength = "shape_attributes.length";
 constexpr std::string_view kShapeAttributesSpeed = "shape_attributes.speed";
 constexpr std::string_view kShapeAttributesSpeedLimit = "shape_attributes.speed_limit";
 constexpr std::string_view kShapeAttributesClosure = "shape_attributes.closure";
+constexpr std::string_view kShapeAttributesCongestion = "shape_attributes.congestion";
 
 // Categories
 constexpr std::string_view kNodeCategory = "node.";
