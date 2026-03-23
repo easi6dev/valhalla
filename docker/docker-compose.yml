@@ -5,7 +5,7 @@
 #
 # Usage:
 #   docker-compose up -d
-#   docker-compose logs -f valhalla-jni
+#   docker-compose logs -f valhalla
 #   docker-compose down
 #
 # Note: Monitoring via Datadog (see deployment docs)
@@ -17,13 +17,13 @@ services:
   # ============================================
   # Valhalla JNI Routing Service
   # ============================================
-  valhalla-jni:
+  valhalla:
     build:
       context: ..
       dockerfile: docker/Dockerfile.prod
-    image: valhalla-jni:latest
-    container_name: valhalla-jni
-    hostname: valhalla-jni
+    image: valhalla:latest
+    container_name: valhalla
+    hostname: valhalla
 
     # Port mapping
     ports:
@@ -94,7 +94,7 @@ services:
   #   networks:
   #     - valhalla-net
   #   depends_on:
-  #     - valhalla-jni
+  #     - valhalla
   #   restart: unless-stopped
 
 # ============================================
