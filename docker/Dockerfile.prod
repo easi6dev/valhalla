@@ -58,8 +58,6 @@ RUN apt-get update && apt-get install -y \
 RUN apt-get update && apt-get install -y --fix-missing openjdk-17-jdk \
     && rm -rf /var/lib/apt/lists/*
 
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-${TARGETARCH}
-
 # Set working directory
 WORKDIR /build
 
@@ -112,10 +110,11 @@ RUN DEST=src/bindings/java/src/main/resources/lib/linux-amd64 && \
     VERSIONED=$(ls /usr/local/lib/libvalhalla.so.[0-9]* 2>/dev/null | sort -V | tail -1) && \
     if [ -z "$VERSIONED" ]; then echo "❌ libvalhalla.so.* not found in /usr/local/lib/" && exit 1; fi && \
     SONAME=$(basename "$VERSIONED") && \
+    MAJOR=$(echo "$SONAME" | grep -oP '(?<=\.so\.)\d+') && \
     cp "$VERSIONED" "$DEST/$SONAME" && \
-    cp "$VERSIONED" "$DEST/libvalhalla.so.3" && \
+    cp "$VERSIONED" "$DEST/libvalhalla.so.${MAJOR}" && \
     cp "$VERSIONED" "$DEST/libvalhalla.so" && \
-    echo "✅ $SONAME copied as libvalhalla.so.3 and libvalhalla.so" && \
+    echo "✅ $SONAME copied as libvalhalla.so.${MAJOR} and libvalhalla.so" && \
     ls -la "$DEST"
 
 # ── Step D: Build native JNI library with CMake ──────────────────────────────
@@ -196,7 +195,9 @@ RUN apt-get update && apt-get install -y \
 
 # Install AWS CLI v2 — required for S3 sync in the tile pipeline.
 # Done in a separate layer so an AWS CLI update doesn't bust the apt cache layer.
-RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip \
+# Arch is derived at build time: uname -m returns x86_64 or aarch64 (AWS uses both names verbatim).
+RUN ARCH=$(uname -m) && \
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}.zip" -o /tmp/awscliv2.zip \
     && unzip -q /tmp/awscliv2.zip -d /tmp \
     && /tmp/aws/install \
     && rm -rf /tmp/awscliv2.zip /tmp/aws \
@@ -260,9 +261,6 @@ VOLUME ["/valhalla/tiles", "/valhalla/osm", "/valhalla/admin", "/valhalla/config
 USER valhalla
 WORKDIR /app
 
-HEALTHCHECK NONE
-EXPOSE 8080
-
 ENV JAVA_OPTS="-Xmx4g \
     -Xms2g \
     -XX:+UseG1GC \
@@ -272,6 +270,6 @@ ENV JAVA_OPTS="-Xmx4g \
     -Djava.library.path=/usr/local/lib \
     -Dvalhalla.env=prod"
 
-# Default: show bundled native libs (JAR is a library, not a standalone app).
-# Replace with your application entrypoint when ready.
-CMD ["sh", "-c", "echo '=== Valhalla JNI Library ===' && unzip -l /app/valhalla-jni.jar | grep '\\.so' && echo '=== Library ready ==='"]
+# Default: validate JAR and native libs are present, then print usage.
+# This image is a library image — supply your own entrypoint in production.
+CMD ["sh", "-c", "echo '=== Valhalla JNI Library ===' && test -f /app/valhalla-jni.jar || (echo '❌ valhalla-jni.jar missing' && exit 1) && ls /usr/local/lib/libvalhalla*.so* && unzip -l /app/valhalla-jni.jar | grep '\\.so' && echo '=== Library ready. Provide your application entrypoint. ==='"]
