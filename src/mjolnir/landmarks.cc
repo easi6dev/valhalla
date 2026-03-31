@@ -39,21 +39,21 @@ void apply_location_defaults(Location& location) {
     location.mutable_search_filter()->set_exclude_closures(true);
   if (!location.search_filter().has_exclude_closures_case())
     location.mutable_search_filter()->set_exclude_closures(true);
-  if (!location.search_filter().has_level())
+  if (!location.search_filter().has_level_case())
     location.mutable_search_filter()->set_level(kMaxLevel);
   if (!location.has_street_side_cutoff_case())
     location.set_street_side_cutoff(valhalla::RoadClass::kServiceOther);
 
-  if (!location.has_node_snap_tolerance())
+  if (!location.has_node_snap_tolerance_case())
     location.set_node_snap_tolerance(5.f);
 
-  if (!location.has_heading_tolerance())
+  if (!location.has_heading_tolerance_case())
     location.set_heading_tolerance(60.f);
 
-  if (!location.has_street_side_tolerance())
+  if (!location.has_street_side_tolerance_case())
     location.set_street_side_tolerance(5);
 
-  if (!location.has_street_side_max_distance())
+  if (!location.has_street_side_max_distance_case())
     location.set_street_side_max_distance(1000);
 
   if (!location.has_search_cutoff_case())
