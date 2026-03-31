@@ -15,13 +15,6 @@ on:
       - 'config/**'
       - '.github/workflows/build-valhalla-image.yml'
   workflow_dispatch:
-    inputs:
-      push_latest:
-        description: 'Also tag and push as :latest'
-        required: false
-        default: 'false'
-        type: choice
-        options: ['true', 'false']
 
 concurrency:
   group: build-valhalla-${{ github.ref }}
@@ -38,9 +31,6 @@ jobs:
   prepare:
     runs-on: mvlchain-runner-large
     outputs:
-      tag_sha:    ${{ steps.tags.outputs.tag_sha }}
-      tag_branch: ${{ steps.tags.outputs.tag_branch }}
-      tags:       ${{ steps.tags.outputs.tags }}
       branch:     ${{ steps.tags.outputs.branch }}
       short_sha:  ${{ steps.tags.outputs.short_sha }}
       image_base: ${{ steps.tags.outputs.image_base }}
@@ -56,36 +46,14 @@ jobs:
           BRANCH=$(echo "${GITHUB_REF_NAME}" | sed 's/[^a-zA-Z0-9._-]/-/g')
           IMAGE_BASE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}"
 
-          TAG_SHA="${IMAGE_BASE}:${BRANCH}-${SHORT_SHA}"
-          TAG_BRANCH="${IMAGE_BASE}:${BRANCH}"
-          TAGS="${TAG_SHA},${TAG_BRANCH}"
-
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.push_latest }}" == "true" ]]; then
-            TAGS="${TAGS},${IMAGE_BASE}:latest"
-          fi
-
-          echo "tags=${TAGS}"               >> "$GITHUB_OUTPUT"
           echo "short_sha=${SHORT_SHA}"     >> "$GITHUB_OUTPUT"
           echo "branch=${BRANCH}"           >> "$GITHUB_OUTPUT"
           echo "image_base=${IMAGE_BASE}"   >> "$GITHUB_OUTPUT"
-          echo "tag_sha=${TAG_SHA}"         >> "$GITHUB_OUTPUT"
-          echo "tag_branch=${TAG_BRANCH}"   >> "$GITHUB_OUTPUT"
 
-  # ── Build each arch natively in parallel ──────────────────────────────────
+  # ── Build and push final tags directly ───────────────────────────────────
   build:
     needs: prepare
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            arch: amd64
-            runner: mvlchain-runner-large
-          # arm64 temporarily disabled — QEMU emulation too slow (>1hr); re-enable when native arm64 runner is available
-          # - platform: linux/arm64
-          #   arch: arm64
-          #   runner: mvlchain-runner-large
+    runs-on: mvlchain-runner-large
 
     steps:
       - uses: actions/checkout@v4
@@ -98,33 +66,30 @@ jobs:
         with:
           registries: ${{ env.ECR_ACCOUNT_ID }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push by digest
+      - name: Build and push
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile.prod
-          platforms: ${{ matrix.platform }}
+          platforms: linux/amd64
           push: true
-          # Push to a digest-only tag; merged into final manifest in next job
-          tags: ${{ needs.prepare.outputs.image_base }}:${{ matrix.arch }}-${{ needs.prepare.outputs.short_sha }}
-          # Per-arch cache scope — each arch gets its own cache, no cross-busting
-          cache-from: type=gha,scope=valhalla-${{ matrix.arch }}
-          cache-to:   type=gha,mode=max,scope=valhalla-${{ matrix.arch }}
+          tags: |
+            ${{ needs.prepare.outputs.image_base }}:${{ needs.prepare.outputs.branch }}-latest
+            ${{ needs.prepare.outputs.image_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.short_sha }}
+          cache-from: type=gha,scope=valhalla-amd64
+          cache-to:   type=gha,mode=max,scope=valhalla-amd64
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.ref.name=${{ needs.prepare.outputs.branch }}
 
-  # ── Merge arch images into a single multi-arch manifest ───────────────────
-  merge:
+  # ── Verify and summarise ─────────────────────────────────────────────────
+  verify:
     needs: [prepare, build]
     runs-on: mvlchain-runner-large
     steps:
@@ -133,46 +98,9 @@ jobs:
         with:
           registries: ${{ env.ECR_ACCOUNT_ID }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Create and push multi-arch manifest
-        run: |
-          IMAGE_BASE="${{ needs.prepare.outputs.image_base }}"
-          SHORT_SHA="${{ needs.prepare.outputs.short_sha }}"
-
-          # Pull the per-arch images built above
-          AMD64="${IMAGE_BASE}:amd64-${SHORT_SHA}"
-          ARM64="${IMAGE_BASE}:arm64-${SHORT_SHA}"
-
-          # Only include arch images that were actually built and pushed
-          SOURCES=""
-          if docker buildx imagetools inspect "${AMD64}" &>/dev/null; then
-            SOURCES="${SOURCES} ${AMD64}"
-            echo "✅ amd64 image found: ${AMD64}"
-          else
-            echo "⚠️  amd64 image not found, skipping"
-          fi
-          if docker buildx imagetools inspect "${ARM64}" &>/dev/null; then
-            SOURCES="${SOURCES} ${ARM64}"
-            echo "✅ arm64 image found: ${ARM64}"
-          else
-            echo "⚠️  arm64 image not found, skipping"
-          fi
-
-          if [ -z "${SOURCES}" ]; then
-            echo "❌ No arch images found — cannot create manifest" && exit 1
-          fi
-
-          # Push all final tags as multi-arch manifests
-          IFS=',' read -ra TAGS <<< "${{ needs.prepare.outputs.tags }}"
-          for TAG in "${TAGS[@]}"; do
-            docker buildx imagetools create -t "${TAG}" ${SOURCES}
-          done
-
       - name: Verify image — JAR and native libs present
         run: |
-          IMAGE="${{ needs.prepare.outputs.tag_sha }}"
+          IMAGE="${{ needs.prepare.outputs.image_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.short_sha }}"
           docker pull "${IMAGE}"
 
           echo "--- Verifying JAR exists and checking size ---"
@@ -201,17 +129,18 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Tags pushed:**" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ needs.prepare.outputs.tags }}" | tr ',' '\n' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ needs.prepare.outputs.image_base }}:${{ needs.prepare.outputs.branch }}-latest" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ needs.prepare.outputs.image_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.short_sha }}" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**To use this image for JNI JAR extraction:**" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`bash" >> "$GITHUB_STEP_SUMMARY"
           echo "docker run --rm -v \$(pwd)/output:/out \\" >> "$GITHUB_STEP_SUMMARY"
-          echo "  ${{ needs.prepare.outputs.tag_sha }} \\" >> "$GITHUB_STEP_SUMMARY"
+          echo "  ${{ needs.prepare.outputs.image_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.short_sha }} \\" >> "$GITHUB_STEP_SUMMARY"
           echo "  sh -c 'cp /app/valhalla-jni.jar /out/'" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**To use this image for tile building:**" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`bash" >> "$GITHUB_STEP_SUMMARY"
-          echo "VALHALLA_DOCKER_IMAGE=${{ needs.prepare.outputs.tag_sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "VALHALLA_DOCKER_IMAGE=${{ needs.prepare.outputs.image_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.short_sha }}" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
