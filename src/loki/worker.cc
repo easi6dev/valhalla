@@ -91,9 +91,7 @@ std::pair<bool, bool> loki_worker_t::parse_location(valhalla::Location& location
     location.mutable_search_filter()->set_max_road_class(valhalla::RoadClass::kMotorway);
   if (!location.search_filter().has_exclude_closures_case())
     location.mutable_search_filter()->set_exclude_closures(true);
-  if (!location.search_filter().has_exclude_closures_case())
-    location.mutable_search_filter()->set_exclude_closures(true);
-  if (!location.search_filter().has_level())
+  if (location.search_filter().has_level_case() == valhalla::SearchFilter::HAS_LEVEL_NOT_SET)
     location.mutable_search_filter()->set_level(baldr::kMaxLevel);
 
   return modified_search_cutoff;
