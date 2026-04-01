@@ -23,7 +23,7 @@ concurrency:
 env:
   ECR_ACCOUNT_ID: "633107344074"
   ECR_REGISTRY: 633107344074.dkr.ecr.ap-southeast-1.amazonaws.com
-  ECR_REPOSITORY: valhalla
+  ECR_REPOSITORY: valhalla-tile-pipeline
   AWS_REGION: ap-southeast-1
 
 jobs:
