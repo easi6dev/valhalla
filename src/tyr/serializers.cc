@@ -549,8 +549,9 @@ void serializeIncidentProperties(rapidjson::writer_wrapper_t& writer,
     writer(key_prefix + "geometry_index_end", end_shape_index);
   }
 
-  if (incident_metadata.has_display_ll() && incident_metadata.display_ll().has_lat() &&
-      incident_metadata.display_ll().has_lng()) {
+  if (incident_metadata.has_display_ll() &&
+      incident_metadata.display_ll().has_lat_case() != valhalla::IncidentsTile_Metadata_LatLng::HAS_LAT_NOT_SET &&
+      incident_metadata.display_ll().has_lng_case() != valhalla::IncidentsTile_Metadata_LatLng::HAS_LNG_NOT_SET) {
     writer.start_object("display_ll");
     writer("lat", incident_metadata.display_ll().lat());
     writer("lon", incident_metadata.display_ll().lng());
