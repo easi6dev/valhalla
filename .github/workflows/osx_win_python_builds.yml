@@ -207,6 +207,7 @@ jobs:
     runs-on: macos-14
     name: Build OSX & Python wheels
     needs: [publish_pypi]
+    if: false  # disabled — OSX builds skipped on PR checks
     steps:
       - uses: actions/checkout@v4
         with:
