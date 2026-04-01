@@ -67,7 +67,8 @@ COPY . .
 # ── Step A: Build tile tools from source ────────────────────────────────────
 # valhalla_build_tiles and valhalla_build_admins compiled with local changes.
 # Installed to /usr/local so they are on PATH in both builder and runner stages.
-RUN cmake -B build-tiles \
+RUN --mount=type=cache,target=/root/.ccache \
+    cmake -B build-tiles \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_C_COMPILER=gcc-13 \
       -DCMAKE_CXX_COMPILER=g++-13 \
@@ -120,7 +121,8 @@ RUN DEST=src/bindings/java/src/main/resources/lib/linux-amd64 && \
 # ── Step D: Build native JNI library with CMake ──────────────────────────────
 # Runs from src/bindings/java/ — cmake -S . points at src/bindings/java/CMakeLists.txt
 # Proto headers are at /build/build/src/valhalla/proto (VALHALLA_SOURCE_DIR=/build)
-RUN JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac)))) && \
+RUN --mount=type=cache,target=/root/.ccache \
+    JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac)))) && \
     echo "Using JAVA_HOME=${JAVA_HOME}" && \
     cd src/bindings/java && \
     mkdir -p build && \
@@ -128,6 +130,8 @@ RUN JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac)))) && \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_C_COMPILER=gcc-13 \
       -DCMAKE_CXX_COMPILER=g++-13 \
+      -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
       -DVALHALLA_SOURCE_DIR=/build \
       -DJAVA_HOME="${JAVA_HOME}" && \
     cmake --build build --config Release -j"$(nproc)" && \
@@ -151,7 +155,8 @@ RUN MULTIARCH=$(gcc-13 -print-multiarch) && \
     fi
 
 # ── Step G: Build JAR with Gradle (skip tests in Docker build) ───────────────
-RUN cd src/bindings/java && \
+RUN --mount=type=cache,target=/root/.gradle \
+    cd src/bindings/java && \
     chmod +x gradlew && \
     ./gradlew clean build -x buildNative -x test && \
     echo "✅ Gradle JAR build complete"
