@@ -43,7 +43,7 @@ custom_files/
 !src/**/build/*.gradle
 *.gradle.kts.swp
 
-# Gradle build reports and generated files
+# Gradle build reports and generated filess
 **/build/reports/
 **/build/test-results/
 **/build/jmh-results/
