@@ -170,6 +170,15 @@ FROM eclipse-temurin:17-jre-jammy
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Install GCC 13 libstdc++ from the same PPA used in the builder stage.
+# valhalla_build_tiles is compiled with GCC 13, requiring GLIBCXX_3.4.31/3.4.32
+# which Ubuntu 22.04's default libstdc++ (GCC 11) does not provide.
+RUN apt-get update && apt-get install -y software-properties-common \
+    && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+    && apt-get update \
+    && apt-get install -y libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install runtime dependencies
 # Base image is Ubuntu 22.04 (jammy) — library names match the builder stage.
 # JRE 17 is already provided by eclipse-temurin:17-jre-jammy.
