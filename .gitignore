@@ -92,7 +92,7 @@ data/
 deploy/config/pipeline.local.conf
 deploy/config/pipeline.dev.conf
 deploy/config/pipeline.test.conf
-deploy/config/pipeline.staging.conf
+deploy/config/pipeline.stage.conf
 deploy/config/pipeline.prod.conf
 
 # Compiled native libraries (binaries should not be committed)
