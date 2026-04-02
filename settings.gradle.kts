@@ -11,12 +11,8 @@ pluginManagement {
 }
 
 // Centralized version catalog (shared by all subprojects)
+// gradle/libs.versions.toml is auto-discovered by Gradle — no explicit from() needed.
 dependencyResolutionManagement {
-    versionCatalogs {
-        create("libs") {
-            from(files("gradle/libs.versions.toml"))
-        }
-    }
     repositories {
         mavenCentral()
         google()

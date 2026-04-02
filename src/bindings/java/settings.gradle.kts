@@ -7,29 +7,6 @@
 // - Plugin management
 // ============================================
 
-rootProject.name = "valhalla-jni"
-
-// ============================================
-// Dependency Resolution Management
-// ============================================
-dependencyResolutionManagement {
-    // Use version catalog
-    versionCatalogs {
-        create("libs") {
-            from(files("../../../gradle/libs.versions.toml"))
-        }
-    }
-
-    // Repository order (fastest first)
-    repositories {
-        mavenCentral()
-        google()
-    }
-
-    // Repository filtering (security + performance)
-    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
-}
-
 // ============================================
 // Plugin Management
 // ============================================
@@ -39,6 +16,24 @@ pluginManagement {
         mavenCentral()
         google()
     }
+}
+
+rootProject.name = "valhalla-jni"
+
+// ============================================
+// Dependency Resolution Management
+// ============================================
+// Note: version catalog (libs) is defined in the root settings.gradle.kts.
+// Do NOT redefine it here — Gradle forbids calling from() more than once on the same catalog.
+dependencyResolutionManagement {
+    // Repository order (fastest first)
+    repositories {
+        mavenCentral()
+        google()
+    }
+
+    // Repository filtering (security + performance)
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
 }
 
 // ============================================
