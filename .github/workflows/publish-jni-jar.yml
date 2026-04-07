@@ -3,16 +3,15 @@ name: Publish JNI JAR
 # Triggered automatically after Build valhalla Image succeeds,
 # or manually via workflow_dispatch.
 #
-# Branch strategy (mirrors CircleCI tada-spring-common):
-#   dist        → release version  (no -SNAPSHOT suffix), publishes + creates git tag
-#   master      → SNAPSHOT
-#   development → SNAPSHOT
+# Branch strategy (mirrors tada-spring-common):
+#   dist     -> release version  (artifactId: valhalla-jni)
+#   snapshot -> snapshot         (artifactId: valhalla-jni-snapshot)
 
 on:
   workflow_run:
     workflows: ["Build valhalla Image"]
     types: [completed]
-    branches: [master, development, dist]
+    branches: [dist, snapshot]
   workflow_dispatch:
     inputs:
       image_tag:
@@ -41,12 +40,12 @@ jobs:
     runs-on: mvlchain-runner-large
 
     steps:
-      # ── 1. Checkout (needed for gradlew + build.gradle.kts) ─────────────────
+      # -- 1. Checkout (needed for gradlew + build.gradle.kts) ------------------
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ── 2. Resolve branch name ───────────────────────────────────────────────
+      # -- 2. Resolve branch name -----------------------------------------------
       # workflow_run does not set GITHUB_REF_NAME to the triggering branch,
       # so we derive it explicitly.
       - name: Resolve branch name
@@ -61,34 +60,7 @@ jobs:
           echo "name=${BRANCH}"       >> "$GITHUB_OUTPUT"
           echo "safe=${BRANCH_SAFE}"  >> "$GITHUB_OUTPUT"
 
-      # ── 3. Resolve version (mirrors CircleCI: dist → release, else SNAPSHOT) ─
-      - name: Resolve publish version
-        id: version
-        run: |
-          BRANCH="${{ steps.branch.outputs.name }}"
-          RAW_VERSION=$(grep -E '^version\s*=\s*findProperty' ${{ env.GRADLE_DIR }}/build.gradle.kts \
-            | grep -oP '"\K[^"]+(?="\s*\?\?)')
-          # Fallback: read the hardcoded default string
-          if [[ -z "${RAW_VERSION}" ]]; then
-            RAW_VERSION=$(grep -E '"\d+\.\d+\.\d+' ${{ env.GRADLE_DIR }}/build.gradle.kts \
-              | grep -oP '"\K[0-9]+\.[0-9]+\.[0-9]+(?=-SNAPSHOT)?' | head -1)
-          fi
-          BASE_VERSION="${RAW_VERSION%%-SNAPSHOT}"  # strip any existing -SNAPSHOT
-
-          if [[ "${BRANCH}" == dist* ]]; then
-            PUBLISH_VERSION="${BASE_VERSION}"
-            IS_RELEASE=true
-          else
-            PUBLISH_VERSION="${BASE_VERSION}-SNAPSHOT"
-            IS_RELEASE=false
-          fi
-
-          echo "base=${BASE_VERSION}"             >> "$GITHUB_OUTPUT"
-          echo "publish=${PUBLISH_VERSION}"       >> "$GITHUB_OUTPUT"
-          echo "is_release=${IS_RELEASE}"         >> "$GITHUB_OUTPUT"
-          echo "Resolved version: ${PUBLISH_VERSION} (release=${IS_RELEASE})"
-
-      # ── 4. Determine ECR image tag to pull ───────────────────────────────────
+      # -- 3. Determine ECR image tag to pull -----------------------------------
       - name: Resolve image tag
         id: image
         run: |
@@ -103,13 +75,13 @@ jobs:
           echo "full=${FULL_IMAGE}"   >> "$GITHUB_OUTPUT"
           echo "Pulling image: ${FULL_IMAGE}"
 
-      # ── 5. Authenticate to ECR ───────────────────────────────────────────────
+      # -- 4. Authenticate to ECR -----------------------------------------------
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
         with:
           registries: ${{ env.ECR_ACCOUNT_ID }}
 
-      # ── 6. Extract JAR from the Docker image ─────────────────────────────────
+      # -- 5. Extract JAR from the Docker image ---------------------------------
       - name: Extract JAR from image
         run: |
           IMAGE="${{ steps.image.outputs.full }}"
@@ -127,41 +99,64 @@ jobs:
           fi
           echo "✅ JAR extracted: ${SIZE} bytes"
 
-      # ── 7. Set up JDK for Gradle ─────────────────────────────────────────────
+      # -- 6. Set up JDK 17 (needed for mvn) ------------------------------------
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      # ── 8. Publish JAR to GitHub Packages ────────────────────────────────────
-      # Mirrors CircleCI: REPO_POSTFIX="" for dist, "-snapshot" for others.
-      # Skips buildNative and test — JAR came from the verified Docker image.
+      # -- 7. Publish JAR to GitHub Packages via Maven --------------------------
+      # Mirrors tada-spring-common: differentiate by artifactId only.
+      #   dist branch     -> global.tada:valhalla-jni:<version>
+      #   snapshot branch -> global.tada:valhalla-jni-snapshot:<version>
+      # No version computation — the version is read directly from build.gradle.kts.
       - name: Publish to GitHub Packages
-        working-directory: ${{ env.GRADLE_DIR }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_USERNAME: ${{ github.actor }}
-          REPO_POSTFIX: ${{ steps.version.outputs.is_release == 'true' && '' || '-snapshot' }}
+          REPO_POSTFIX: ${{ startsWith(steps.branch.outputs.name, 'dist') && '' || '-snapshot' }}
         run: |
-          echo "Branch:      ${{ steps.branch.outputs.name }}"
-          echo "Version:     ${{ steps.version.outputs.publish }}"
-          echo "REPO_POSTFIX: ${REPO_POSTFIX}"
+          ARTIFACT_ID="valhalla-jni${REPO_POSTFIX}"
+          VERSION=$(grep -oP '(?<=version = ")[^"]+' ${{ env.GRADLE_DIR }}/build.gradle.kts | head -1)
+          JAR="/tmp/jni-jar/valhalla-jni.jar"
+          REPO_URL="https://maven.pkg.github.com/easi6dev/valhalla"
 
-          chmod +x gradlew
+          echo "Publishing  : ${ARTIFACT_ID}:${VERSION}"
+          echo "Source JAR  : ${JAR}"
+          echo "Target repo : ${REPO_URL}"
 
-          ./gradlew publish \
-            -x buildNative \
-            -x test \
-            --no-daemon
+          # Write a minimal settings.xml so Maven can authenticate
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<'EOF'
+          <settings>
+            <servers>
+              <server>
+                <id>github</id>
+                <username>${GITHUB_ACTOR}</username>
+                <password>${GITHUB_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
 
-      # ── 9. Create and push git tag (release branches only) ───────────────────
+          mvn --batch-mode deploy:deploy-file \
+            -Dfile="${JAR}" \
+            -DgroupId="global.tada" \
+            -DartifactId="${ARTIFACT_ID}" \
+            -Dversion="${VERSION}" \
+            -Dpackaging="jar" \
+            -DrepositoryId="github" \
+            -Durl="${REPO_URL}" \
+            -DgeneratePom=true
+
+      # -- 8. Create and push git tag (dist branches only) ----------------------
       - name: Create and push git tag
-        if: steps.version.outputs.is_release == 'true'
+        if: startsWith(steps.branch.outputs.name, 'dist')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.version.outputs.base }}"
+          VERSION=$(grep -oP '(?<=version = ")[^"]+' ${{ env.GRADLE_DIR }}/build.gradle.kts | head -1)
           TAG="v${VERSION}"
           echo "Target tag: ${TAG}"
 
@@ -178,15 +173,18 @@ jobs:
             echo "✅ Pushed tag ${TAG}"
           fi
 
-      # ── 10. Summary ──────────────────────────────────────────────────────────
+      # -- 9. Summary -----------------------------------------------------------
       - name: Summary
         run: |
+          REPO_POSTFIX="${{ startsWith(steps.branch.outputs.name, 'dist') && '' || '-snapshot' }}"
+          VERSION=$(grep -oP '(?<=version = ")[^"]+' ${{ env.GRADLE_DIR }}/build.gradle.kts | head -1)
           echo "## JNI JAR Publish Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Branch | \`${{ steps.branch.outputs.name }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Version | \`${{ steps.version.outputs.publish }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Release | \`${{ steps.version.outputs.is_release }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ArtifactId | \`valhalla-jni${REPO_POSTFIX}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Version | \`${VERSION}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Source image | \`${{ steps.image.outputs.full }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Publish method | \`mvn deploy:deploy-file\` (direct, no Gradle) |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Published to | \`https://maven.pkg.github.com/easi6dev/valhalla\` |" >> "$GITHUB_STEP_SUMMARY"
