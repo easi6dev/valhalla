@@ -164,7 +164,9 @@ RUN --mount=type=cache,target=/root/.gradle \
 # ── Verify artifacts ─────────────────────────────────────────────────────────
 RUN test -f src/bindings/java/src/main/resources/lib/linux-amd64/libvalhalla_jni.so \
     || (echo "❌ libvalhalla_jni.so not found!" && exit 1)
-RUN test -f src/bindings/java/build/libs/valhalla-jni-1.0.0-SNAPSHOT.jar \
+RUN JAR=$(ls src/bindings/java/build/libs/valhalla-jni-*.jar 2>/dev/null \
+        | grep -v sources | grep -v javadoc | head -1) && \
+    test -n "$JAR" \
     || (echo "❌ valhalla-jni.jar not found!" && ls src/bindings/java/build/libs/ && exit 1)
 
 # ============================================
@@ -252,9 +254,13 @@ RUN useradd -m -s /bin/bash valhalla && \
 # Copy JNI JAR and config from builder.
 # config/ includes regions/regions.json and valhalla-{region}.json — used by
 # run-tile-pipeline.sh at runtime to resolve OSM sources and build configs.
-COPY --from=builder --chown=valhalla:valhalla \
-    /build/src/bindings/java/build/libs/valhalla-jni-1.0.0-SNAPSHOT.jar \
-    /app/valhalla-jni.jar
+# Copy the main JAR (exclude -sources and -javadoc variants).
+# A small shell step is needed because COPY does not support globbing with exclusion.
+COPY --from=builder /build/src/bindings/java/build/libs/ /tmp/jni-jars/
+RUN JAR=$(ls /tmp/jni-jars/valhalla-jni-*.jar | grep -v sources | grep -v javadoc | head -1) && \
+    cp "$JAR" /app/valhalla-jni.jar && \
+    chown valhalla:valhalla /app/valhalla-jni.jar && \
+    rm -rf /tmp/jni-jars
 
 COPY --from=builder --chown=valhalla:valhalla \
     /build/config \
