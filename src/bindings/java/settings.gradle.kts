@@ -23,8 +23,7 @@ rootProject.name = "valhalla-jni"
 // ============================================
 // Dependency Resolution Management
 // ============================================
-// Note: version catalog (libs) is defined in the root settings.gradle.kts.
-// Do NOT redefine it here — Gradle forbids calling from() more than once on the same catalog.
+// Version catalog (libs) is auto-discovered from gradle/libs.versions.toml.
 dependencyResolutionManagement {
     // Repository order (fastest first)
     repositories {
