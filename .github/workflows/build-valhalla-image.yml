@@ -2,7 +2,7 @@ name: Build valhalla Image
 
 on:
   push:
-    branches: [master, development, test, staging]
+    branches: [master, development, test, staging, dist, snapshot]
     paths:
       - 'src/**'
       - 'proto/**'

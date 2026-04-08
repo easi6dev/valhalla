@@ -1,0 +1,36 @@
+[versions]
+kotlin = "2.0.21"
+dokka = "1.9.20"
+detekt = "1.23.7"
+jmh-plugin = "0.7.2"
+jmh = "1.37"
+slf4j = "2.0.16"
+json = "20240303"
+logback = "1.5.12"
+junit = "5.11.3"
+coroutines = "1.9.0"
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
+jmh = { id = "me.champeau.jmh", version.ref = "jmh-plugin" }
+
+[libraries]
+kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
+kotlin-reflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+json = { module = "org.json:json", version.ref = "json" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit" }
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
+junit-jupiter-params = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+jmh-core = { module = "org.openjdk.jmh:jmh-core", version.ref = "jmh" }
+jmh-generator-annprocess = { module = "org.openjdk.jmh:jmh-generator-annprocess", version.ref = "jmh" }
+
+[bundles]
+kotlin = ["kotlin-stdlib", "kotlin-reflect", "kotlinx-coroutines-core"]
+testing = ["junit-jupiter-api", "junit-jupiter-engine", "junit-jupiter-params", "kotlin-test"]
+jmh = ["jmh-core", "jmh-generator-annprocess"]
