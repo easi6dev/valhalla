@@ -25,8 +25,8 @@ plugins {
     idea
 }
 
-group = findProperty("group") as String? ?: "global.tada.valhalla"
-version = findProperty("version") as String? ?: "1.0.0-SNAPSHOT"
+group = "global.tada"
+version = "1.0.0"
 
 repositories {
     mavenCentral()
@@ -288,47 +288,23 @@ jmh {
 // Maven Publishing
 // ============================================
 publishing {
-    publications {
-        create<MavenPublication>("maven") {
-            from(components["java"])
-
-            pom {
-                name.set("Valhalla JNI")
-                description.set("Java/Kotlin bindings for Valhalla routing engine with multi-region support")
-                url.set("https://github.com/valhalla/valhalla")
-
-                licenses {
-                    license {
-                        name.set("MIT License")
-                        url.set("https://opensource.org/licenses/MIT")
-                    }
-                }
-
-                developers {
-                    developer {
-                        id.set("valhalla")
-                        name.set("Valhalla Contributors")
-                        email.set("valhalla@example.com")
-                    }
-                }
-
-                scm {
-                    connection.set("scm:git:git://github.com/valhalla/valhalla.git")
-                    developerConnection.set("scm:git:ssh://github.com/valhalla/valhalla.git")
-                    url.set("https://github.com/valhalla/valhalla")
-                }
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/easi6dev/valhalla")
+            credentials {
+                username = System.getenv("GITHUB_USERNAME")
+                password = System.getenv("GITHUB_TOKEN")
             }
         }
     }
 
-    repositories {
-        maven {
-            name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/valhalla/valhalla")
-            credentials {
-                username = System.getenv("GITHUB_ACTOR")
-                password = System.getenv("GITHUB_TOKEN")
-            }
+    publications {
+        register("gpr", MavenPublication::class) {
+            val repoPostfix = System.getenv("REPO_POSTFIX") ?: ""
+            artifactId = "valhalla-jni$repoPostfix"
+            from(components["java"])
+            // sourcesJar is auto-created by java { withSourcesJar() } above
         }
     }
 }

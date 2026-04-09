@@ -1,5 +1,8 @@
 name: Valhalla MinGW Build
-on: [pull_request]
+on:
+  pull_request:
+    branches:
+      - _disabled
 
 jobs:
   build:

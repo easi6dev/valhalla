@@ -41,7 +41,7 @@ trap '' PIPE
 # Constants
 # ---------------------------------------------------------------------------
 readonly SCRIPT_VERSION="1.0.0"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 readonly PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Retry settings
@@ -213,6 +213,11 @@ bootstrap() {
     SKIP_ELEVATION="${SKIP_ELEVATION:-false}"
     KEEP_VERSIONS="${KEEP_VERSIONS_ARG:-${KEEP_VERSIONS:-3}}"
     S3_TILE_BUCKET="${S3_TILE_BUCKET:-}"
+    # Normalize: strip trailing slash, then ensure s3:// prefix
+    if [[ -n "${S3_TILE_BUCKET}" ]]; then
+        S3_TILE_BUCKET="${S3_TILE_BUCKET%/}"
+        [[ "${S3_TILE_BUCKET}" != s3://* ]] && S3_TILE_BUCKET="s3://${S3_TILE_BUCKET}"
+    fi
     S3_REGION="${S3_REGION:-ap-southeast-1}"
     VALHALLA_BUILD_TILES_BIN="${VALHALLA_BUILD_TILES_BIN:-}"
     VALHALLA_DOCKER_IMAGE="${VALHALLA_DOCKER_IMAGE:-ghcr.io/valhalla/valhalla:latest}"

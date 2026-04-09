@@ -6,7 +6,7 @@ on:
     - cron: "0 0 1 */2 *"  # every 2 months
   push:
     branches:
-      - master
+      - _disabled
     paths:
       - scripts/valhalla_build_timezones
   workflow_dispatch:

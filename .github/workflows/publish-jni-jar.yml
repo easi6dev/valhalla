@@ -1,0 +1,210 @@
+name: Publish JNI JAR
+
+# Triggered automatically after Build valhalla Image succeeds,
+# or manually via workflow_dispatch.
+#
+# Branch strategy (mirrors tada-spring-common):
+#   dist     -> release  (artifactId: valhalla-jni)
+#   snapshot -> snapshot (artifactId: valhalla-jni-snapshot)
+#
+# Note: workflow_dispatch from any other branch falls back to snapshot routing.
+
+on:
+  workflow_run:
+    workflows: ["Build valhalla Image"]
+    types: [completed]
+    branches: [dist, snapshot]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Full ECR image tag to extract JAR from (e.g. development-abc1234). Leave blank to use branch-latest."
+        required: false
+        default: ""
+
+concurrency:
+  group: publish-jni-jar-${{ github.ref }}
+  cancel-in-progress: false   # never cancel a publish mid-run
+
+env:
+  ECR_ACCOUNT_ID: "633107344074"
+  ECR_REGISTRY: 633107344074.dkr.ecr.ap-southeast-1.amazonaws.com
+  ECR_REPOSITORY: valhalla
+  AWS_REGION: ap-southeast-1
+  GRADLE_DIR: src/bindings/java
+
+jobs:
+  publish:
+    # For workflow_run: only proceed if the upstream build succeeded
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    runs-on: mvlchain-runner-large
+
+    steps:
+      # -- 1. Checkout (needed for build.gradle.kts version extraction) ---------
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # -- 2. Resolve branch name -----------------------------------------------
+      # workflow_run does not set GITHUB_REF_NAME to the triggering branch,
+      # so we derive it explicitly.
+      - name: Resolve branch name
+        id: branch
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            BRANCH="${{ github.event.workflow_run.head_branch }}"
+          else
+            BRANCH="${GITHUB_REF_NAME}"
+          fi
+          BRANCH_SAFE=$(echo "${BRANCH}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+          echo "name=${BRANCH}"       >> "$GITHUB_OUTPUT"
+          echo "safe=${BRANCH_SAFE}"  >> "$GITHUB_OUTPUT"
+
+      # -- 3. Resolve publish metadata (artifactId + version) -------------------
+      # dist branch   -> valhalla-jni          (release)
+      # other branches -> valhalla-jni-snapshot (snapshot)
+      # Version is read once here and referenced by all downstream steps.
+      - name: Resolve publish metadata
+        id: meta
+        run: |
+          BRANCH="${{ steps.branch.outputs.name }}"
+
+          if [[ "${BRANCH}" == dist* ]]; then
+            ARTIFACT_ID="valhalla-jni"
+          else
+            ARTIFACT_ID="valhalla-jni-snapshot"
+          fi
+
+          VERSION=$(grep -oP '(?<=version = ")[^"]+' ${{ env.GRADLE_DIR }}/build.gradle.kts | head -1)
+          if [[ -z "${VERSION}" ]]; then
+            echo "ERROR: Could not extract version from build.gradle.kts" && exit 1
+          fi
+
+          echo "artifact_id=${ARTIFACT_ID}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}"         >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${ARTIFACT_ID}:${VERSION} (branch=${BRANCH})"
+
+      # -- 4. Determine ECR image tag to pull -----------------------------------
+      - name: Resolve image tag
+        id: image
+        run: |
+          if [[ -n "${{ github.event.inputs.image_tag }}" ]]; then
+            TAG="${{ github.event.inputs.image_tag }}"
+          else
+            BRANCH_SAFE="${{ steps.branch.outputs.safe }}"
+            TAG="${BRANCH_SAFE}-latest"
+          fi
+          FULL_IMAGE="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${TAG}"
+          echo "tag=${TAG}"           >> "$GITHUB_OUTPUT"
+          echo "full=${FULL_IMAGE}"   >> "$GITHUB_OUTPUT"
+          echo "Pulling image: ${FULL_IMAGE}"
+
+      # -- 5. Authenticate to ECR -----------------------------------------------
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registries: ${{ env.ECR_ACCOUNT_ID }}
+
+      # -- 6. Extract JAR from the Docker image ---------------------------------
+      - name: Extract JAR from image
+        run: |
+          IMAGE="${{ steps.image.outputs.full }}"
+          docker pull "${IMAGE}"
+
+          # Copy the JAR out of the image without starting a long-lived container
+          CONTAINER_ID=$(docker create "${IMAGE}")
+          mkdir -p /tmp/jni-jar
+          docker cp "${CONTAINER_ID}:/app/valhalla-jni.jar" /tmp/jni-jar/valhalla-jni.jar
+          docker rm "${CONTAINER_ID}"
+
+          SIZE=$(stat -c%s /tmp/jni-jar/valhalla-jni.jar)
+          if [[ "${SIZE}" -lt 1048576 ]]; then
+            echo "❌ Extracted JAR is suspiciously small (${SIZE} bytes)" && exit 1
+          fi
+          echo "✅ JAR extracted: ${SIZE} bytes"
+
+      # -- 7. Set up JDK 17 (needed for mvn) ------------------------------------
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # -- 8. Publish JAR to GitHub Packages via Maven --------------------------
+      # Publishes the JAR extracted from the Docker image directly — no Gradle
+      # compilation or rebuild. mvn deploy:deploy-file generates the POM,
+      # checksums, and handles repository routing.
+      - name: Publish to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ARTIFACT_ID="${{ steps.meta.outputs.artifact_id }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          JAR="/tmp/jni-jar/valhalla-jni.jar"
+          REPO_URL="https://maven.pkg.github.com/easi6dev/valhalla"
+
+          echo "Publishing  : ${ARTIFACT_ID}:${VERSION}"
+          echo "Source JAR  : ${JAR}"
+          echo "Target repo : ${REPO_URL}"
+
+          # Write settings.xml for Maven authentication (EOF must be at column 0)
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<EOF
+          <settings>
+            <servers>
+              <server>
+                <id>github</id>
+                <username>${GITHUB_ACTOR}</username>
+                <password>${GITHUB_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+
+          mvn --batch-mode deploy:deploy-file \
+            -Dfile="${JAR}" \
+            -DgroupId="global.tada" \
+            -DartifactId="${ARTIFACT_ID}" \
+            -Dversion="${VERSION}" \
+            -Dpackaging="jar" \
+            -DrepositoryId="github" \
+            -Durl="${REPO_URL}" \
+            -DgeneratePom=true
+
+      # -- 9. Create and push git tag (dist branches only) ----------------------
+      - name: Create and push git tag
+        if: startsWith(steps.branch.outputs.name, 'dist')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          TAG="v${VERSION}"
+          echo "Target tag: ${TAG}"
+
+          git config user.email "github-actions@github.com"
+          git config user.name  "GitHub Actions"
+          git remote set-url origin "https://${GITHUB_TOKEN}@github.com/easi6dev/valhalla.git"
+
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; then
+            echo "Tag ${TAG} already exists on origin. Skipping."
+          else
+            git tag "${TAG}" 2>/dev/null || echo "Local tag ${TAG} already exists, skipping local creation"
+            git push origin "${TAG}"
+            echo "✅ Pushed tag ${TAG}"
+          fi
+
+      # -- 10. Summary ----------------------------------------------------------
+      - name: Summary
+        run: |
+          echo "## JNI JAR Publish Summary"                                                          >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                                     >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |"                                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|"                                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | \`${{ steps.branch.outputs.name }}\` |"                                  >> "$GITHUB_STEP_SUMMARY"
+          echo "| ArtifactId | \`${{ steps.meta.outputs.artifact_id }}\` |"                         >> "$GITHUB_STEP_SUMMARY"
+          echo "| Version | \`${{ steps.meta.outputs.version }}\` |"                                >> "$GITHUB_STEP_SUMMARY"
+          echo "| Source image | \`${{ steps.image.outputs.full }}\` |"                             >> "$GITHUB_STEP_SUMMARY"
+          echo "| Publish method | \`mvn deploy:deploy-file\` (direct, no Gradle) |"               >> "$GITHUB_STEP_SUMMARY"
+          echo "| Published to | \`https://maven.pkg.github.com/easi6dev/valhalla\` |"              >> "$GITHUB_STEP_SUMMARY"
