@@ -21,7 +21,11 @@ on:
   workflow_run:
     workflows: ["Build valhalla Image"]
     types: [completed]
-    branches: [dist, snapshot]
+    # NOTE: No 'branches' filter here intentionally.
+    # GitHub's workflow_run 'branches' filter is evaluated against the default
+    # branch and is unreliable — it silently drops triggers without any error.
+    # Branch restriction is enforced explicitly in the job-level 'if' condition
+    # below, checking github.event.workflow_run.head_branch at runtime instead.
   workflow_dispatch:
     inputs:
       image_tag:
@@ -46,10 +50,18 @@ env:
 
 jobs:
   publish:
-    # For workflow_run: only proceed if the upstream build succeeded
+    # Allow manual triggers (workflow_dispatch) from any branch.
+    # For automatic triggers (workflow_run): only proceed when:
+    #   1. The upstream Build valhalla Image workflow succeeded, AND
+    #   2. It ran on 'snapshot' or a 'dist*' branch.
+    # Branch check is done here (not in the trigger's 'branches' filter) because
+    # GitHub's workflow_run 'branches' filter is evaluated against the default
+    # branch and silently drops events — runtime 'if' is the reliable alternative.
     if: >
       github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.head_branch == 'snapshot' ||
+        startsWith(github.event.workflow_run.head_branch, 'dist')))
 
     runs-on: mvlchain-runner-large
 
