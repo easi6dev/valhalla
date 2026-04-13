@@ -26,7 +26,7 @@ plugins {
 }
 
 group = "global.tada"
-version = "1.0.0"
+// version is defined in gradle.properties (single source of truth)
 
 repositories {
     mavenCentral()
@@ -301,8 +301,7 @@ publishing {
 
     publications {
         register("gpr", MavenPublication::class) {
-            val repoPostfix = System.getenv("REPO_POSTFIX") ?: ""
-            artifactId = "valhalla-jni$repoPostfix"
+            artifactId = "valhalla-jni"
             from(components["java"])
             // sourcesJar is auto-created by java { withSourcesJar() } above
         }

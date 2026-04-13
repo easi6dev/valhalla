@@ -3,9 +3,9 @@ name: Publish JNI JAR
 # Triggered automatically after Build valhalla Image succeeds,
 # or manually via workflow_dispatch.
 #
-# Branch strategy (mirrors tada-spring-common):
-#   dist     -> release  (artifactId: valhalla-jni)
-#   snapshot -> snapshot (artifactId: valhalla-jni-snapshot)
+# Branch strategy:
+#   dist     -> release  (artifactId: valhalla-jni, version: 1.0.0)
+#   snapshot -> snapshot (artifactId: valhalla-jni, version: 1.0.0-SNAPSHOT)
 #
 # Note: workflow_dispatch from any other branch falls back to snapshot routing.
 #
@@ -75,30 +75,31 @@ jobs:
           echo "safe=${BRANCH_SAFE}"  >> "$GITHUB_OUTPUT"
 
       # -- 3. Resolve publish metadata ------------------------------------------
-      # dist branch    -> REPO_POSTFIX=""           -> artifactId: valhalla-jni
-      # other branches -> REPO_POSTFIX="-snapshot"  -> artifactId: valhalla-jni-snapshot
+      # artifactId is always valhalla-jni (consistent single name).
+      # Version carries the channel signal:
+      #   dist branches  -> X.Y.Z        (release)
+      #   other branches -> X.Y.Z-SNAPSHOT
       - name: Resolve publish metadata
         id: meta
         run: |
           BRANCH="${{ steps.branch.outputs.name }}"
 
+          # Read base version from gradle.properties (single source of truth).
+          # Strip -SNAPSHOT suffix if present, then re-add based on branch.
+          BASE_VERSION=$(grep -oP '^version=\K\S+' ${{ env.GRADLE_DIR }}/gradle.properties | sed 's/-SNAPSHOT//' | head -1)
+          if [[ -z "${BASE_VERSION}" ]]; then
+            echo "ERROR: Could not extract version from gradle.properties" && exit 1
+          fi
+
           if [[ "${BRANCH}" == dist* ]]; then
-            REPO_POSTFIX=""
+            VERSION="${BASE_VERSION}"
           else
-            REPO_POSTFIX="-snapshot"
+            VERSION="${BASE_VERSION}-SNAPSHOT"
           fi
 
-          # Anchor to start of line to avoid matching version strings inside
-          # dependency blocks or version catalog entries
-          VERSION=$(grep -oP '^version\s*=\s*"\K[^"]+' ${{ env.GRADLE_DIR }}/build.gradle.kts | head -1)
-          if [[ -z "${VERSION}" ]]; then
-            echo "ERROR: Could not extract version from build.gradle.kts" && exit 1
-          fi
-
-          echo "repo_postfix=${REPO_POSTFIX}"             >> "$GITHUB_OUTPUT"
-          echo "artifact_id=valhalla-jni${REPO_POSTFIX}"  >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}"                       >> "$GITHUB_OUTPUT"
-          echo "Resolved: valhalla-jni${REPO_POSTFIX}:${VERSION} (branch=${BRANCH})"
+          echo "artifact_id=valhalla-jni"  >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}"         >> "$GITHUB_OUTPUT"
+          echo "Resolved: valhalla-jni:${VERSION} (branch=${BRANCH})"
 
       # -- 4. Resolve ECR image tag ---------------------------------------------
       - name: Resolve image tag
@@ -171,20 +172,20 @@ jobs:
           cache: 'gradle'
 
       # -- 8. Publish to GitHub Packages via Gradle (mirrors tada-spring-common) -
+      # Pass -Pversion to override gradle.properties at publish time so dist
+      # branches publish as X.Y.Z and snapshot branches as X.Y.Z-SNAPSHOT.
       - name: Publish to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_USERNAME: ${{ github.actor }}
-          REPO_POSTFIX: ${{ steps.meta.outputs.repo_postfix }}
         working-directory: ${{ env.GRADLE_DIR }}
         run: |
-          echo "Branch      : ${{ steps.branch.outputs.name }}"
-          echo "ArtifactId  : ${{ steps.meta.outputs.artifact_id }}"
-          echo "Version     : ${{ steps.meta.outputs.version }}"
-          echo "REPO_POSTFIX: ${REPO_POSTFIX}"
+          echo "Branch    : ${{ steps.branch.outputs.name }}"
+          echo "ArtifactId: ${{ steps.meta.outputs.artifact_id }}"
+          echo "Version   : ${{ steps.meta.outputs.version }}"
 
           chmod +x gradlew
-          ./gradlew --no-daemon publish
+          ./gradlew --no-daemon publish -Pversion="${{ steps.meta.outputs.version }}"
 
       # -- 9. Create and push git tag (dist branches only) ----------------------
       - name: Create and push git tag
