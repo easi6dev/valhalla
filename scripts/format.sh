@@ -34,5 +34,6 @@ else
     readonly NPROC=1
 fi
 
-find src valhalla test -type f -name '*.h' -o -name '*.cc' \
+find src valhalla test -type f \( -name '*.h' -o -name '*.cc' \) \
+  ! -path 'src/bindings/java/*' \
   | xargs -I{} -P ${NPROC} ${py} scripts/clang_format_wrapper.py -style=file -i {}
