@@ -105,7 +105,7 @@ tasks.test {
 
     // Run tests from the repo root so relative paths like config/regions/regions.json
     // and data/valhalla_tiles/ resolve correctly.
-    // rootDir = .../valhallaV3/src/bindings/java  →  three parentFile calls reach valhallaV3/
+    // rootDir = .../valhalla/src/bindings/java  →  three parentFile calls reach valhalla/
     workingDir = rootDir.parentFile.parentFile.parentFile
 
     // Native library path configuration
