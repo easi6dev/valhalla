@@ -329,7 +329,7 @@ class GeometryMappingService(
     private fun approximateDistanceM(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val dLat = Math.toRadians(lat2 - lat1)
         val dLon = Math.toRadians(lon2 - lon1) * cos(Math.toRadians((lat1 + lat2) / 2.0))
-        return sqrt(dLat * dLat + dLon * dLon) * 6_371_000.0 // Earth radius in metres
+        return sqrt(dLat * dLat + dLon * dLon) * EARTH_RADIUS_M
     }
 
     /**
@@ -488,6 +488,7 @@ class GeometryMappingService(
     }
 
     companion object {
+        private const val EARTH_RADIUS_M = 6_371_000.0
         private const val AMBIGUITY_THRESHOLD = 0.10
         private const val SHORT_SEGMENT_THRESHOLD_M = 20.0
 

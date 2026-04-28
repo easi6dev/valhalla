@@ -368,9 +368,12 @@ class GeometryMappingServiceTest {
         assertEquals(1, loaded.summary.total)
         assertEquals(1, loaded.summary.mapped)
         assertEquals(1, loaded.summary.highConfidence)
-        assertNotNull(loaded.segments["100001"])
-        assertEquals(0.92, loaded.segments["100001"]!!.bestCandidate!!.totalScore, 0.001)
-        assertEquals(ConfidenceLevel.HIGH, loaded.segments["100001"]!!.bestCandidate!!.confidence)
+        val segment = loaded.segments["100001"]
+        assertNotNull(segment)
+        val best = segment.bestCandidate
+        assertNotNull(best)
+        assertEquals(0.92, best.totalScore, 0.001)
+        assertEquals(ConfidenceLevel.HIGH, best.confidence)
         assertTrue(loaded.tileToEdges.containsKey(TileKey(2, 756425)))
     }
 
@@ -431,8 +434,9 @@ class GeometryMappingServiceTest {
 
         assertEquals(1, legacy.totalMapped)
         assertEquals(1, legacy.totalUnmapped)
-        assertNotNull(legacy.linkToEdges["100001"])
-        assertEquals(MappedEdge(2, 756425, 347), legacy.linkToEdges["100001"]!![0])
+        val edges = legacy.linkToEdges["100001"]
+        assertNotNull(edges)
+        assertEquals(MappedEdge(2, 756425, 347), edges[0])
         assertNull(legacy.linkToEdges["100002"])
     }
 
