@@ -46,7 +46,10 @@ data class ScoredCandidate(
  * @property roadName LTA road name
  * @property roadCategory LTA road category code
  * @property bestCandidate Highest-scoring candidate, or null if unmapped
- * @property allCandidates All scored candidates ordered by score descending
+ * @property allCandidates All scored candidates ordered by score descending. Populated only
+ *   during initial scoring by [GeometryMappingService.buildMapping]; not reconstructed when
+ *   a [GeometryMapping] is loaded from cache (the cache stores best-candidate-only). Report
+ *   generation uses this and runs on the in-memory mapping, before any cache round-trip.
  * @property flagged Whether this mapping is ambiguous or otherwise flagged
  * @property flagReason Human-readable reason for flagging (empty if not flagged)
  */
