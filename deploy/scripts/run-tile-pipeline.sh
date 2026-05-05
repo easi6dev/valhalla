@@ -725,6 +725,64 @@ phase_swap_latest() {
 }
 
 # ---------------------------------------------------------------------------
+# Geometry Mapping (LTA → Valhalla edge resolution)
+# ---------------------------------------------------------------------------
+# Runs against the just-swapped 'latest' tiles. Required for the Python
+# traffic cron to translate LTA speed-band linkIds into Valhalla
+# (tile_id, edge_index) pairs at runtime. Job exit semantics:
+#   0 → mapping succeeded; pipeline continues
+#   1 → mapping below acceptance threshold; pipeline warns and continues
+#   2 → mapping failed (config error, no snapshot, Actor failure); pipeline fails
+# ---------------------------------------------------------------------------
+geometry_mapping() {
+    set_phase "Geometry Mapping"
+
+    if [[ "${SKIP_GEOMETRY_MAPPING}" == true ]]; then
+        log_info "Skipping geometry mapping (--skip-geometry-mapping)"
+        return 0
+    fi
+
+    if [[ "${DRY_RUN}" == true ]]; then
+        log_dry "Would invoke GeometryMappingJob against ${LATEST_LINK}"
+        return 0
+    fi
+
+    # Resolve the JNI JAR — prefer the prod path baked into the Docker image,
+    # fall back to the local-dev gradle output.
+    local jar=""
+    if [[ -f "/app/valhalla-jni.jar" ]]; then
+        jar="/app/valhalla-jni.jar"
+    else
+        # Filter out -sources.jar and -javadoc.jar — Gradle's java{} block
+        # produces them via withSourcesJar()/withJavadocJar(); only the main
+        # JAR has the compiled classes. Mirrors docker/Dockerfile.prod.
+        jar="$(ls "${PROJECT_ROOT}/src/bindings/java/build/libs/valhalla-jni-"*.jar 2>/dev/null \
+            | grep -v sources | grep -v javadoc | head -1)"
+    fi
+
+    if [[ -z "${jar}" || ! -f "${jar}" ]]; then
+        log_error "valhalla-jni JAR not found (checked /app/valhalla-jni.jar and ${PROJECT_ROOT}/src/bindings/java/build/libs/)"
+        return 2
+    fi
+
+    log_info "Using JAR: ${jar}"
+    log_info "Tile dir:  $(readlink -f "${LATEST_LINK}")"
+
+    local job_exit_code=0
+    VALHALLA_TILE_DIR="${LATEST_LINK}" \
+        java -cp "${jar}" global.tada.valhalla.traffic.sg.GeometryMappingJob \
+        || job_exit_code=$?
+
+    case "${job_exit_code}" in
+        0) log_ok "Geometry mapping completed (acceptance criteria met)" ;;
+        1) log_warn "Geometry mapping below acceptance threshold (job exit 1) — pipeline continues" ;;
+        *) log_error "Geometry mapping failed (job exit ${job_exit_code})"; return 2 ;;
+    esac
+
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Phase 7: Cleanup old versions
 # ---------------------------------------------------------------------------
 phase_cleanup() {
@@ -773,6 +831,7 @@ Options:
   --osm-max-age-days <n>    Max OSM file age before re-download (default: 6)
   --no-elevation            Skip elevation data
   --skip-build              Skip OSM download and tile build; validate existing 'latest' tiles
+  --skip-geometry-mapping   Skip the geometry-mapping job after tile swap
   --keep-versions <n>       Old tile versions to retain (default: 3)
   --dry-run                 Print actions without executing
   --notify-url <url>        POST webhook on completion/failure
@@ -827,6 +886,7 @@ main() {
     OSM_MAX_AGE_DAYS=6
     DRY_RUN=false
     SKIP_BUILD=false
+    SKIP_GEOMETRY_MAPPING=false
     KEEP_VERSIONS_ARG=""
     NOTIFY_URL="${NOTIFY_URL:-}"
     SKIP_ELEVATION_ARG=""
@@ -838,7 +898,8 @@ main() {
             --force-download)   FORCE_DOWNLOAD=true;        shift   ;;
             --osm-max-age-days) OSM_MAX_AGE_DAYS="$2";     shift 2 ;;
             --no-elevation)     SKIP_ELEVATION_ARG=true;   shift   ;;
-            --skip-build)       SKIP_BUILD=true;            shift   ;;
+            --skip-build)              SKIP_BUILD=true;             shift   ;;
+            --skip-geometry-mapping)   SKIP_GEOMETRY_MAPPING=true;  shift   ;;
             --keep-versions)    KEEP_VERSIONS_ARG="$2";    shift 2 ;;
             --dry-run)          DRY_RUN=true;               shift   ;;
             --notify-url)       NOTIFY_URL="$2";            shift 2 ;;
@@ -869,6 +930,7 @@ main() {
     phase_s3_sync
     phase_swap_latest
     phase_cleanup
+    geometry_mapping
 
     log_ok "Pipeline completed successfully — v${VERSION_TAG}"
     exit ${PIPELINE_EXIT_CODE}
