@@ -898,8 +898,8 @@ main() {
             --force-download)   FORCE_DOWNLOAD=true;        shift   ;;
             --osm-max-age-days) OSM_MAX_AGE_DAYS="$2";     shift 2 ;;
             --no-elevation)     SKIP_ELEVATION_ARG=true;   shift   ;;
-            --skip-build)              SKIP_BUILD=true;             shift   ;;
-            --skip-geometry-mapping)   SKIP_GEOMETRY_MAPPING=true;  shift   ;;
+            --skip-build)       SKIP_BUILD=true;            shift   ;;
+            --skip-geometry-mapping) SKIP_GEOMETRY_MAPPING=true; shift ;;
             --keep-versions)    KEEP_VERSIONS_ARG="$2";    shift 2 ;;
             --dry-run)          DRY_RUN=true;               shift   ;;
             --notify-url)       NOTIFY_URL="$2";            shift 2 ;;
