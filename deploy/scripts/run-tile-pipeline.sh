@@ -462,6 +462,10 @@ _generate_build_config() {
         jq 'del(.additional_data.elevation)' "${output}" > "${output}.tmp"
         mv "${output}.tmp" "${output}"
         log_info "Elevation processing disabled"
+    else
+        jq --arg dir "${VERSIONED_TILE_DIR}" '.additional_data.elevation = $dir' "${output}" > "${output}.tmp"
+        mv "${output}.tmp" "${output}"
+        log_info "Elevation dir: ${VERSIONED_TILE_DIR}"
     fi
 
     log_info "Build config: ${output}"
