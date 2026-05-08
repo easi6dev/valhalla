@@ -159,11 +159,21 @@ object RegionConfigFactory {
         // Get costing options if present
         val costingOptions = regionConfig.optJSONObject("costing_options")
 
+        // Traffic paths are derived from tile_dir: {tile_dir}/../
+        // incident_dir must match the path LtaFetchJob writes to: {base}/incidents/
+        val trafficBlock = if (enableTraffic) {
+            val parent = tileDir.trimEnd('/').substringBeforeLast('/')
+            """
+            "traffic_extract": "$parent/traffic/traffic.tar",
+            "incident_dir": "$parent/incidents",
+            """
+        } else ""
+
         return """
         {
           "mjolnir": {
             "tile_dir": "$tileDir",
-            "max_cache_size": 1073741824,
+            ${trafficBlock}"max_cache_size": 1073741824,
             "concurrency": 4
           },
           "loki": {
