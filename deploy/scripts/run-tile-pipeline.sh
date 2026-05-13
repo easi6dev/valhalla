@@ -772,8 +772,18 @@ geometry_mapping() {
     log_info "Using JAR: ${jar}"
     log_info "Tile dir:  $(readlink -f "${LATEST_LINK}")"
 
+    # Write geometry mapping outputs as siblings of the versioned tile dirs so
+    # the Python traffic cron can read them off the shared EFS volume. Without
+    # these overrides the job falls back to the relative `data/...` default and
+    # the file lands inside the container's filesystem, gone after the pod exits.
+    local cache_dir="${VALHALLA_TILE_DIR}/${REGION}/cache"
+    mkdir -p "${cache_dir}"
+
     local job_exit_code=0
     VALHALLA_TILE_DIR="${LATEST_LINK}" \
+    GEOMETRY_MAPPING_CACHE_PATH="${cache_dir}/geometry_mapping.json" \
+    GEOMETRY_MAPPING_REPORT_PATH="${cache_dir}/geometry_mapping_report.txt" \
+    GEOMETRY_MAPPING_JSON_REPORT_PATH="${cache_dir}/geometry_mapping_report.json" \
         java -cp "${jar}" global.tada.valhalla.traffic.sg.GeometryMappingJob \
         || job_exit_code=$?
 
