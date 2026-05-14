@@ -784,7 +784,7 @@ geometry_mapping() {
     GEOMETRY_MAPPING_CACHE_PATH="${cache_dir}/geometry_mapping.json" \
     GEOMETRY_MAPPING_REPORT_PATH="${cache_dir}/geometry_mapping_report.txt" \
     GEOMETRY_MAPPING_JSON_REPORT_PATH="${cache_dir}/geometry_mapping_report.json" \
-        java -cp "${jar}" global.tada.valhalla.traffic.sg.GeometryMappingJob \
+        java -cp "${jar}:/app/lib/*" global.tada.valhalla.traffic.sg.GeometryMappingJob \
         || job_exit_code=$?
 
     case "${job_exit_code}" in

@@ -60,6 +60,10 @@ dependencies {
 
     // Logging
     implementation(libs.slf4j.api)
+    // Runtime binding for standalone JVM invocations (see `copyRuntimeDeps` below).
+    // Spring Boot consumers bring their own binding so this is `runtimeOnly`, not
+    // `implementation` — they don't see it on their compile/runtime classpath.
+    runtimeOnly(libs.slf4j.simple)
 
     // JSON parsing
     implementation(libs.json)
@@ -218,6 +222,23 @@ tasks.jar {
     // Reproducible builds
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
+}
+
+// ============================================
+// Runtime Dependencies for Standalone JVM Use
+// ============================================
+// The published `valhalla-jni-*.jar` is thin — project classes + native libs only.
+// For standalone CLI invocations like `java -cp valhalla-jni.jar GeometryMappingJob`
+// (see deploy/scripts/run-tile-pipeline.sh) the transitive deps (SLF4J, Kotlin
+// stdlib, coroutines, org.json) must also be on the classpath. This task copies
+// runtime deps to build/libs/runtime/ so the Dockerfile can ship them under
+// /app/lib/. Invoked explicitly from Dockerfile.prod; not wired to `jar`/`assemble`
+// so downstream maven consumers don't pay for it.
+tasks.register<Copy>("copyRuntimeDeps") {
+    description = "Copies runtime dependencies to build/libs/runtime/ for Docker packaging."
+    group = "build"
+    from(configurations.runtimeClasspath)
+    into(layout.buildDirectory.dir("libs/runtime"))
 }
 
 // ============================================

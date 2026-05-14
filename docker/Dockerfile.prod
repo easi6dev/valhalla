@@ -158,7 +158,7 @@ RUN MULTIARCH=$(gcc-13 -print-multiarch) && \
 RUN --mount=type=cache,target=/root/.gradle \
     cd src/bindings/java && \
     chmod +x gradlew && \
-    ./gradlew clean build -x buildNative -x test && \
+    ./gradlew clean build copyRuntimeDeps -x buildNative -x test && \
     echo "✅ Gradle JAR build complete"
 
 # ── Verify artifacts ─────────────────────────────────────────────────────────
@@ -261,6 +261,17 @@ RUN JAR=$(ls /tmp/jni-jars/valhalla-jni-*.jar | grep -v sources | grep -v javado
     cp "$JAR" /app/valhalla-jni.jar && \
     chown valhalla:valhalla /app/valhalla-jni.jar && \
     rm -rf /tmp/jni-jars
+
+# Runtime dependencies for standalone JVM invocations.
+# The thin /app/valhalla-jni.jar above does not bundle transitive deps (SLF4J,
+# Kotlin stdlib, coroutines, org.json), so `java -cp /app/valhalla-jni.jar
+# GeometryMappingJob` in run-tile-pipeline.sh would fail with NoClassDefFoundError.
+# Gradle's `copyRuntimeDeps` task produces these jars at build/libs/runtime/.
+COPY --from=builder /build/src/bindings/java/build/libs/runtime/ /tmp/jni-runtime/
+RUN mkdir -p /app/lib && \
+    cp /tmp/jni-runtime/*.jar /app/lib/ && \
+    chown -R valhalla:valhalla /app/lib && \
+    rm -rf /tmp/jni-runtime
 
 COPY --from=builder --chown=valhalla:valhalla \
     /build/config \
