@@ -859,8 +859,24 @@ phase_efs_sync() {
     size="$(du -sh "${efs_versioned_dir}" | cut -f1)"
     log_ok "EFS copy complete: ${size} in ${elapsed}s"
 
-    # Atomic symlink swap — readers see either the old version or the new,
-    # never a half-state. Same idiom as phase_swap_latest.
+    # Atomic symlink swap. Readers see either the old version or the new,
+    # never a half-state. Two preconditions ln -sfn alone doesn't handle:
+    #
+    # 1. If ${efs_latest_link} pre-exists as a real DIRECTORY (e.g. created
+    #    by region bootstrap before this script ever ran), `ln -sfn target
+    #    dir` does NOT replace it — it silently creates `dir/target` inside,
+    #    producing a useless self-referencing symlink. We must rmdir the
+    #    (presumed-empty) placeholder first.
+    # 2. If it pre-exists as a symlink to the same target, ln -sfn is a
+    #    no-op; harmless.
+    if [[ -d "${efs_latest_link}" && ! -L "${efs_latest_link}" ]]; then
+        if [[ -n "$(ls -A "${efs_latest_link}" 2>/dev/null)" ]]; then
+            log_error "EFS latest exists as a non-empty directory: ${efs_latest_link}. Manual cleanup required."
+            return 5
+        fi
+        log_info "Removing pre-existing empty directory at ${efs_latest_link} (bootstrap placeholder)"
+        rmdir "${efs_latest_link}"
+    fi
     ln -sfn "v${VERSION_TAG}" "${efs_latest_link}"
     log_ok "EFS latest symlink updated: ${efs_latest_link} → v${VERSION_TAG}"
 
