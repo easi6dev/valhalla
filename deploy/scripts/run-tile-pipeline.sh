@@ -803,6 +803,88 @@ geometry_mapping() {
 }
 
 # ---------------------------------------------------------------------------
+# Phase 6.5: EFS Tile Sync
+# ---------------------------------------------------------------------------
+# Mirrors the just-built tiles to EFS so the tada-traffic-data-builder cron
+# (running in a separate pod) can mmap the .gph files at
+# ${VALHALLA_EFS_DIR}/${REGION}/latest. Without this, that cron's call to
+# read_directed_edge_count silently hits FileNotFoundError, returns 0 for
+# every tile, and the cron emits a syntactically-valid but empty traffic.tar
+# (32-byte headers, no per-edge entries).
+#
+# Runs AFTER geometry_mapping so the EFS swap only happens when both the
+# tiles and the matching mapping.json are ready — readers see the old
+# {tiles, mapping} pair consistently until the symlink flips.
+#
+# Skipped when VALHALLA_EFS_DIR is unset/absent — local dev path.
+# ---------------------------------------------------------------------------
+phase_efs_sync() {
+    set_phase "Phase 6.5: EFS Tile Sync"
+
+    local efs_dir="${VALHALLA_EFS_DIR:-/mnt/efs/valhalla_tiles}"
+    if [[ ! -d "${efs_dir}" ]]; then
+        log_info "EFS dir not present at ${efs_dir} — skipping EFS sync (local dev)"
+        return 0
+    fi
+
+    if [[ "${DRY_RUN}" == true ]]; then
+        log_dry "Would copy: ${VERSIONED_TILE_DIR} → ${efs_dir}/${REGION}/v${VERSION_TAG}"
+        log_dry "Would update: ${efs_dir}/${REGION}/latest → v${VERSION_TAG}"
+        return 0
+    fi
+
+    local efs_region_dir="${efs_dir}/${REGION}"
+    local efs_versioned_dir="${efs_region_dir}/v${VERSION_TAG}"
+    local efs_latest_link="${efs_region_dir}/latest"
+    local efs_partial_dir="${efs_versioned_dir}.partial"
+
+    mkdir -p "${efs_region_dir}"
+
+    log_info "Copying tiles to EFS: ${efs_versioned_dir}"
+    local start_epoch
+    start_epoch="$(date +%s)"
+
+    # Copy to .partial first; rename on success. Prevents a partial copy
+    # from being observable via the latest symlink if cp dies mid-run.
+    rm -rf "${efs_partial_dir}"
+    if ! cp -r "${VERSIONED_TILE_DIR}" "${efs_partial_dir}"; then
+        log_error "EFS copy failed: ${VERSIONED_TILE_DIR} → ${efs_partial_dir}"
+        rm -rf "${efs_partial_dir}"
+        return 5
+    fi
+    mv -T "${efs_partial_dir}" "${efs_versioned_dir}"
+
+    local elapsed=$(( $(date +%s) - start_epoch ))
+    local size
+    size="$(du -sh "${efs_versioned_dir}" | cut -f1)"
+    log_ok "EFS copy complete: ${size} in ${elapsed}s"
+
+    # Atomic symlink swap — readers see either the old version or the new,
+    # never a half-state. Same idiom as phase_swap_latest.
+    ln -sfn "v${VERSION_TAG}" "${efs_latest_link}"
+    log_ok "EFS latest symlink updated: ${efs_latest_link} → v${VERSION_TAG}"
+
+    # Prune old EFS versions — keep last N. Same retention as local cleanup.
+    local versions
+    mapfile -t versions < <(
+        find "${efs_region_dir}" -maxdepth 1 -type d -name "v[0-9]*" \
+        | sort
+    )
+    local total=${#versions[@]}
+    local to_remove=$(( total - KEEP_VERSIONS ))
+    if [[ ${to_remove} -gt 0 ]]; then
+        log_info "EFS versions: ${total} (keeping ${KEEP_VERSIONS}); removing ${to_remove} oldest"
+        for (( i=0; i<to_remove; i++ )); do
+            local old="${versions[$i]}"
+            log_info "Removing old EFS version: $(basename "${old}")"
+            rm -rf "${old}"
+        done
+    else
+        log_info "EFS versions: ${total} (keeping ${KEEP_VERSIONS}) — nothing to prune"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Phase 7: Cleanup old versions
 # ---------------------------------------------------------------------------
 phase_cleanup() {
@@ -951,6 +1033,7 @@ main() {
     phase_swap_latest
     phase_cleanup
     geometry_mapping
+    phase_efs_sync
 
     log_ok "Pipeline completed successfully — v${VERSION_TAG}"
     exit ${PIPELINE_EXIT_CODE}
