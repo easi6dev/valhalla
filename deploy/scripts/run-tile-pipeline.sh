@@ -772,18 +772,24 @@ geometry_mapping() {
     log_info "Using JAR: ${jar}"
     log_info "Tile dir:  $(readlink -f "${LATEST_LINK}")"
 
-    # Write geometry mapping outputs as siblings of the versioned tile dirs so
-    # the Python traffic cron can read them off the shared EFS volume. Without
-    # these overrides the job falls back to the relative `data/...` default and
-    # the file lands inside the container's filesystem, gone after the pod exits.
-    local cache_dir="${VALHALLA_TILE_DIR}/${REGION}/cache"
-    mkdir -p "${cache_dir}"
+    # Snapshots are READ from EFS (written by the tada-traffic-data-builder cron),
+    # and cache outputs are WRITTEN to EFS (consumed by the same cron on its next
+    # tick). EFS lives at /mnt/efs/valhalla_tiles per the K8s volumeMount on both
+    # pods. ${VALHALLA_TILE_DIR} in this pod is /var/valhalla/tiles (local) —
+    # used only by the C++ engine to read the freshly-built tiles — do NOT
+    # conflate it with the EFS path. VALHALLA_EFS_DIR is overridable for local
+    # dev where EFS doesn't exist.
+    local efs_region_dir="${VALHALLA_EFS_DIR:-/mnt/efs/valhalla_tiles}/${REGION}"
+    local efs_cache_dir="${efs_region_dir}/cache"
+    local efs_snapshots_dir="${efs_region_dir}/snapshots/speed_bands"
+    mkdir -p "${efs_cache_dir}"
 
     local job_exit_code=0
     VALHALLA_TILE_DIR="${LATEST_LINK}" \
-    GEOMETRY_MAPPING_CACHE_PATH="${cache_dir}/geometry_mapping.json" \
-    GEOMETRY_MAPPING_REPORT_PATH="${cache_dir}/geometry_mapping_report.txt" \
-    GEOMETRY_MAPPING_JSON_REPORT_PATH="${cache_dir}/geometry_mapping_report.json" \
+    VALHALLA_SNAPSHOTS_DIR="${efs_snapshots_dir}" \
+    GEOMETRY_MAPPING_CACHE_PATH="${efs_cache_dir}/geometry_mapping.json" \
+    GEOMETRY_MAPPING_REPORT_PATH="${efs_cache_dir}/geometry_mapping_report.txt" \
+    GEOMETRY_MAPPING_JSON_REPORT_PATH="${efs_cache_dir}/geometry_mapping_report.json" \
         java -cp "${jar}:/app/lib/*" global.tada.valhalla.traffic.sg.GeometryMappingJob \
         || job_exit_code=$?
 
