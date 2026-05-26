@@ -60,7 +60,8 @@ data class MappedSegment(
     val bestCandidate: ScoredCandidate?,
     val allCandidates: List<ScoredCandidate>,
     val flagged: Boolean,
-    val flagReason: String
+    val flagReason: String,
+    val siblingEdges: List<MappedEdge> = emptyList()
 )
 
 /**
@@ -118,10 +119,18 @@ data class CategoryStats(
  * @property locateFn Function that executes a Valhalla locate request (typically Actor::locate)
  */
 class GeometryMappingService(
-    private val locateFn: (String) -> String
+    private val locateFn: (String) -> String,
+    private val traceAttributesFn: ((String) -> String)? = null
 ) {
 
     private val logger = LoggerFactory.getLogger(GeometryMappingService::class.java)
+
+    /**
+     * Counter for how many LTA links got at least one sibling edge added via
+     * `trace_attributes` fanout. Diagnostic only; logged once per buildMapping.
+     */
+    private var fanoutLinksWithSiblings = 0
+    private var fanoutSiblingEdgesTotal = 0
 
     /**
      * Build a confidence-scored mapping from all LTA speed band segments to Valhalla edges.
@@ -142,6 +151,13 @@ class GeometryMappingService(
                     val edge = mapped.bestCandidate.edge
                     val key = TileKey(edge.tileLevel, edge.tileId)
                     tileToEdges.getOrPut(key) { mutableSetOf() }.add(edge.edgeIndex)
+                }
+                // Index siblings into tileToEdges too, so traffic.tar emission
+                // covers them. Without this, the speed reaches the mapping but
+                // not the per-tile edge set the overlay walks.
+                for (sibling in mapped.siblingEdges) {
+                    val key = TileKey(sibling.tileLevel, sibling.tileId)
+                    tileToEdges.getOrPut(key) { mutableSetOf() }.add(sibling.edgeIndex)
                 }
             } catch (e: Exception) {
                 segments[entry.linkId] = MappedSegment(
@@ -167,6 +183,12 @@ class GeometryMappingService(
             "Geometry mapping complete: {} mapped, {} unmapped, {} high-confidence, {} flagged out of {} segments",
             summary.mapped, summary.unmapped, summary.highConfidence, summary.flagged, summary.total
         )
+        if (traceAttributesFn != null) {
+            logger.info(
+                "Sibling-edge fanout: {} of {} mapped links gained siblings (+{} edges total)",
+                fanoutLinksWithSiblings, summary.mapped, fanoutSiblingEdgesTotal
+            )
+        }
 
         return GeometryMapping(
             segments = segments,
@@ -241,6 +263,12 @@ class GeometryMappingService(
             flagReason = ""
         }
 
+        val siblings = if (best != null) expandToSiblingEdges(entry, best) else emptyList()
+        if (siblings.isNotEmpty()) {
+            fanoutLinksWithSiblings++
+            fanoutSiblingEdgesTotal += siblings.size
+        }
+
         return MappedSegment(
             linkId = entry.linkId,
             roadName = entry.roadName,
@@ -248,8 +276,92 @@ class GeometryMappingService(
             bestCandidate = best,
             allCandidates = deduped,
             flagged = flagged,
-            flagReason = flagReason
+            flagReason = flagReason,
+            siblingEdges = siblings
         )
+    }
+
+    /**
+     * Walk the LTA segment with `trace_attributes` and collect every Valhalla
+     * edge whose OSM way matches `best.osmWayId`. Excludes `best.edge` itself
+     * since it's already represented as the bestCandidate.
+     *
+     * Returns empty list if:
+     * - No `traceAttributesFn` was injected (fanout disabled, e.g. in tests)
+     * - `best.osmWayId == 0` (we can't safely filter without a way-id)
+     * - The trace_attributes call fails (logged at debug; we fall back to single-edge)
+     *
+     * Why this matters: `locate()` returns edges near a POINT. An LTA segment
+     * of N meters typically covers several Valhalla edges along the same way
+     * (Valhalla splits long ways at every node). Only the start/end edges
+     * become locate() candidates; the middle edges miss out on the LTA speed.
+     * `trace_attributes` follows the shape and returns ALL edges along it.
+     */
+    private fun expandToSiblingEdges(
+        entry: SpeedBandEntry,
+        best: ScoredCandidate
+    ): List<MappedEdge> {
+        val fn = traceAttributesFn ?: return emptyList()
+        if (best.osmWayId == 0L) return emptyList()
+
+        val request = JSONObject().apply {
+            put("shape", JSONArray().apply {
+                put(JSONObject()
+                    .put("lat", entry.startLat)
+                    .put("lon", entry.startLon)
+                    .put("type", "break"))
+                put(JSONObject()
+                    .put("lat", entry.endLat)
+                    .put("lon", entry.endLon)
+                    .put("type", "break"))
+            })
+            put("costing", "auto")
+            put("shape_match", "map_snap")
+            put("filters", JSONObject().apply {
+                put("attributes", JSONArray(listOf("edge.id", "edge.way_id", "edge.length")))
+                put("action", "include")
+            })
+        }
+
+        val response = try {
+            fn(request.toString())
+        } catch (e: Exception) {
+            logger.debug("trace_attributes failed for link {}: {}", entry.linkId, e.message)
+            return emptyList()
+        }
+
+        val parsed = try {
+            JSONObject(response)
+        } catch (e: Exception) {
+            logger.debug("trace_attributes response unparseable for link {}: {}", entry.linkId, e.message)
+            return emptyList()
+        }
+
+        val edgesArray = parsed.optJSONArray("edges") ?: return emptyList()
+        val result = mutableListOf<MappedEdge>()
+        val bestKey = Triple(best.edge.tileLevel, best.edge.tileId, best.edge.edgeIndex)
+        val seen = mutableSetOf(bestKey)
+
+        for (i in 0 until edgesArray.length()) {
+            val edgeJson = edgesArray.optJSONObject(i) ?: continue
+            val wayId = edgeJson.optLong("way_id", 0L)
+            if (wayId != best.osmWayId) continue
+
+            // `edge.id` is a packed GraphId (level | tile<<3 | edgeIndex<<25).
+            // Layout per valhalla/baldr/graphid.h: 3 + 22 + 21 bits.
+            val packedId = edgeJson.optLong("id", -1L)
+            if (packedId < 0L) continue
+
+            val level = (packedId and 0x7L).toInt()
+            val tileId = ((packedId shr 3) and 0x3FFFFFL).toInt()
+            val edgeIndex = ((packedId shr 25) and 0x1FFFFFL).toInt()
+            val key = Triple(level, tileId, edgeIndex)
+            if (!seen.add(key)) continue
+
+            result.add(MappedEdge(tileLevel = level, tileId = tileId, edgeIndex = edgeIndex))
+        }
+
+        return result
     }
 
     /**

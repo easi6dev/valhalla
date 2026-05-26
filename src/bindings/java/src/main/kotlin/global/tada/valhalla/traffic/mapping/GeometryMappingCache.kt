@@ -52,6 +52,9 @@ object GeometryMappingCache {
                             put("flagReason", seg.flagReason)
                         }
                         put("edges", JSONArray().apply {
+                            // edges[0] = best candidate (with full scoring metadata).
+                            // edges[1..] = same-way siblings from trace_attributes fanout
+                            // (scoring fields omitted — they share the best's confidence/way).
                             if (seg.bestCandidate != null) {
                                 put(JSONObject().apply {
                                     put("level", seg.bestCandidate.edge.tileLevel)
@@ -63,10 +66,21 @@ object GeometryMappingCache {
                                     put("nameMatch", seg.bestCandidate.roadNameMatch)
                                     put("categoryMatch", seg.bestCandidate.categoryMatch)
                                     put("osmWayId", seg.bestCandidate.osmWayId)
+                                    put("sibling", false)
                                 })
+                                for (sibling in seg.siblingEdges) {
+                                    put(JSONObject().apply {
+                                        put("level", sibling.tileLevel)
+                                        put("tileId", sibling.tileId)
+                                        put("edgeIndex", sibling.edgeIndex)
+                                        put("osmWayId", seg.bestCandidate.osmWayId)
+                                        put("sibling", true)
+                                    })
+                                }
                             }
                         })
                         put("candidateCount", seg.allCandidates.size)
+                        put("siblingCount", seg.siblingEdges.size)
                     })
                 }
             })
@@ -118,7 +132,12 @@ object GeometryMappingCache {
                 val flagged = entry.optBoolean("flagged", false)
                 val flagReason = entry.optString("flagReason", "")
                 val edgesArray = entry.optJSONArray("edges") ?: JSONArray()
-                val candidates = mutableListOf<ScoredCandidate>()
+                // edges[0] = best (full scoring metadata); subsequent entries flagged
+                // sibling=true are same-way fanout edges with no separate scoring.
+                // We tolerate older JSON without the `sibling` field — those treat
+                // every entry as a candidate (back-compat with v1 single-edge files).
+                var bestCandidate: ScoredCandidate? = null
+                val siblings = mutableListOf<MappedEdge>()
 
                 for (j in 0 until edgesArray.length()) {
                     val edgeObj = edgesArray.getJSONObject(j)
@@ -127,23 +146,30 @@ object GeometryMappingCache {
                         tileId = edgeObj.getInt("tileId"),
                         edgeIndex = edgeObj.getInt("edgeIndex")
                     )
-                    val candidate = ScoredCandidate(
-                        edge = edge,
-                        totalScore = edgeObj.optDouble("score", score),
-                        confidence = try {
-                            ConfidenceLevel.valueOf(confidenceStr)
-                        } catch (_: Exception) {
-                            ConfidenceLevel.NONE
-                        },
-                        distanceM = edgeObj.optDouble("distanceM", 0.0),
-                        bearingDiffDeg = edgeObj.optDouble("bearingDiffDeg", 0.0),
-                        roadNameMatch = edgeObj.optBoolean("nameMatch", false),
-                        categoryMatch = edgeObj.optBoolean("categoryMatch", false),
-                        osmRoadName = "",
-                        osmRoadClass = "",
-                        osmWayId = edgeObj.optLong("osmWayId", 0L)
-                    )
-                    candidates.add(candidate)
+                    val isSibling = edgeObj.optBoolean("sibling", false)
+
+                    if (isSibling) {
+                        siblings.add(edge)
+                    } else if (bestCandidate == null) {
+                        bestCandidate = ScoredCandidate(
+                            edge = edge,
+                            totalScore = edgeObj.optDouble("score", score),
+                            confidence = try {
+                                ConfidenceLevel.valueOf(confidenceStr)
+                            } catch (_: Exception) {
+                                ConfidenceLevel.NONE
+                            },
+                            distanceM = edgeObj.optDouble("distanceM", 0.0),
+                            bearingDiffDeg = edgeObj.optDouble("bearingDiffDeg", 0.0),
+                            roadNameMatch = edgeObj.optBoolean("nameMatch", false),
+                            categoryMatch = edgeObj.optBoolean("categoryMatch", false),
+                            osmRoadName = "",
+                            osmRoadClass = "",
+                            osmWayId = edgeObj.optLong("osmWayId", 0L)
+                        )
+                    }
+                    // Note: older v2 JSON without `sibling` flag puts every edge through
+                    // the bestCandidate path (only first is captured); siblings stay empty.
 
                     val key = TileKey(edge.tileLevel, edge.tileId)
                     tileToEdges.getOrPut(key) { mutableSetOf() }.add(edge.edgeIndex)
@@ -153,10 +179,11 @@ object GeometryMappingCache {
                     linkId = linkId,
                     roadName = roadName,
                     roadCategory = roadCategory,
-                    bestCandidate = candidates.firstOrNull(),
-                    allCandidates = candidates,
+                    bestCandidate = bestCandidate,
+                    allCandidates = if (bestCandidate != null) listOf(bestCandidate) else emptyList(),
                     flagged = flagged,
-                    flagReason = flagReason
+                    flagReason = flagReason,
+                    siblingEdges = siblings
                 )
             }
 
@@ -259,9 +286,11 @@ object GeometryMappingCache {
         val linkToEdges = mutableMapOf<String, List<MappedEdge>>()
 
         for ((linkId, seg) in mapping.segments) {
-            if (seg.bestCandidate != null) {
-                linkToEdges[linkId] = listOf(seg.bestCandidate.edge)
-            }
+            val best = seg.bestCandidate?.edge ?: continue
+            // EdgeMapping has always been a 1-to-many type; we just used to put
+            // length-1 lists. Now that the geometry mapping carries siblings,
+            // surface them here so legacy consumers benefit transparently.
+            linkToEdges[linkId] = listOf(best) + seg.siblingEdges
         }
 
         return EdgeMapping(
