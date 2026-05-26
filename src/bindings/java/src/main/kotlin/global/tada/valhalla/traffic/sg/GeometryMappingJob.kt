@@ -126,7 +126,7 @@ object GeometryMappingJob {
             logger.info("Building geometry mapping ({} segments, this may take 15-25 minutes)...", speedBands.size)
             val startMs = System.currentTimeMillis()
 
-            val service = GeometryMappingService(actor::locate)
+            val service = GeometryMappingService(actor::locate, actor::traceAttributes)
             val mapping = service.buildMapping(speedBands)
 
             val elapsedSec = (System.currentTimeMillis() - startMs) / 1000.0
