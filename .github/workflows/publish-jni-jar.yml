@@ -89,15 +89,14 @@ jobs:
       # -- 3. Resolve publish metadata ------------------------------------------
       # artifactId is always valhalla-jni (consistent single name).
       # Version carries the channel signal:
-      #   dist branches  -> X.Y.Z        (release)
-      #   other branches -> X.Y.Z-SNAPSHOT
+      #   dist branches    -> X.Y.Z                          (release, single publish)
+      #   snapshot/others  -> X.Y.Z-SNAPSHOT                 (kept for backward compat)
+      #                    +  YYYY.M.D.<run_number>          (date-versioned, immutable)
       - name: Resolve publish metadata
         id: meta
         run: |
           BRANCH="${{ steps.branch.outputs.name }}"
 
-          # Read base version from gradle.properties (single source of truth).
-          # Strip -SNAPSHOT suffix if present, then re-add based on branch.
           BASE_VERSION=$(grep -oP '^version=\K\S+' ${{ env.GRADLE_DIR }}/gradle.properties | sed 's/-SNAPSHOT//' | head -1)
           if [[ -z "${BASE_VERSION}" ]]; then
             echo "ERROR: Could not extract version from gradle.properties" && exit 1
@@ -105,13 +104,17 @@ jobs:
 
           if [[ "${BRANCH}" == dist* ]]; then
             VERSION="${BASE_VERSION}"
+            DATE_VERSION=""
           else
             VERSION="${BASE_VERSION}-SNAPSHOT"
+            DATE_VERSION="$(date -u +'%Y.%-m.%-d').${GITHUB_RUN_NUMBER}"
           fi
 
-          echo "artifact_id=valhalla-jni"  >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}"         >> "$GITHUB_OUTPUT"
+          echo "artifact_id=valhalla-jni"      >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}"             >> "$GITHUB_OUTPUT"
+          echo "date_version=${DATE_VERSION}"   >> "$GITHUB_OUTPUT"
           echo "Resolved: valhalla-jni:${VERSION} (branch=${BRANCH})"
+          [[ -n "${DATE_VERSION}" ]] && echo "Also publishing date-versioned: valhalla-jni:${DATE_VERSION}"
 
       # -- 4. Resolve ECR image tag ---------------------------------------------
       - name: Resolve image tag
@@ -199,6 +202,21 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon publish -Pversion="${{ steps.meta.outputs.version }}"
 
+      # -- 8b. Publish date-versioned artifact (snapshot branches only) ---------
+      # Snapshot branches get a second publish under a YYYY.M.D.<run_number>
+      # version so each CI build leaves an immutable, traceable artifact in GHP
+      # alongside the mutable 1.0.0-SNAPSHOT. Dist branches skip this step
+      # (DATE_VERSION is empty).
+      - name: Publish date-versioned artifact
+        if: steps.meta.outputs.date_version != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_USERNAME: ${{ github.actor }}
+        working-directory: ${{ env.GRADLE_DIR }}
+        run: |
+          echo "Date version: ${{ steps.meta.outputs.date_version }}"
+          ./gradlew --no-daemon publish -Pversion="${{ steps.meta.outputs.date_version }}"
+
       # -- 9. Create and push git tag (dist branches only) ----------------------
       - name: Create and push git tag
         if: startsWith(steps.branch.outputs.name, 'dist')
@@ -231,6 +249,9 @@ jobs:
           echo "| Branch | \`${{ steps.branch.outputs.name }}\` |"                                      >> "$GITHUB_STEP_SUMMARY"
           echo "| ArtifactId | \`${{ steps.meta.outputs.artifact_id }}\` |"                             >> "$GITHUB_STEP_SUMMARY"
           echo "| Version | \`${{ steps.meta.outputs.version }}\` |"                                    >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "${{ steps.meta.outputs.date_version }}" ]]; then
+            echo "| Date version | \`${{ steps.meta.outputs.date_version }}\` |"                       >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "| Source image | \`${{ steps.image.outputs.full }}\` |"                                 >> "$GITHUB_STEP_SUMMARY"
           echo "| Publish method | \`./gradlew publish\` (native libs from Docker) |"                   >> "$GITHUB_STEP_SUMMARY"
           echo "| Published to | \`https://maven.pkg.github.com/easi6dev/valhalla\` |"                  >> "$GITHUB_STEP_SUMMARY"
