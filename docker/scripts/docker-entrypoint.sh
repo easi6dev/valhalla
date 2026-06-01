@@ -19,7 +19,21 @@ do_build_tar() {
   fi
 }
 
-export server_threads=${server_threads:-$(nproc)}
+# Conservative default for server_threads. Each worker thread keeps its own
+# matrix/A* scratch memory, so defaulting to $(nproc) on a large-core host can
+# OOM under wide-area matrix load (valhalla/valhalla#5172, #4736). Cap the
+# auto-default at SERVER_THREADS_MAX_DEFAULT (4); an explicit server_threads
+# env var always wins and is never capped.
+SERVER_THREADS_MAX_DEFAULT=${SERVER_THREADS_MAX_DEFAULT:-4}
+if [[ -z "${server_threads:-}" ]]; then
+  _nproc=$(nproc)
+  if [[ ${_nproc} -lt ${SERVER_THREADS_MAX_DEFAULT} ]]; then
+    server_threads=${_nproc}
+  else
+    server_threads=${SERVER_THREADS_MAX_DEFAULT}
+  fi
+fi
+export server_threads
 if [[ "$force_rebuild" == "True" ]]; then
   build_tar="Force"
 fi
