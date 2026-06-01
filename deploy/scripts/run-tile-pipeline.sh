@@ -573,6 +573,89 @@ _log_stream() {
 }
 
 # ---------------------------------------------------------------------------
+# Phase 3.5: Build tile extract (.tar with embedded index.bin)
+# ---------------------------------------------------------------------------
+# Packs the versioned tile dir into a single mmap-able tar via
+# scripts/valhalla_build_extract. That script writes an index.bin as the FIRST
+# member of the tar (fixed-width {offset, tile_id, size} records), which lets
+# tile_extract_t initialize in milliseconds without scanning the whole archive
+# and removes the singleton constraint on runtime tileset reloading
+# (valhalla/valhalla#3117, PR #3281). A plain `tar` would NOT write this index.
+# The tar is built before validate/S3 so it is versioned, uploaded, and swapped
+# alongside the tiles.
+# ---------------------------------------------------------------------------
+phase_extract() {
+    set_phase "Phase 3.5: Build Tile Extract"
+
+    TILE_EXTRACT="${VERSIONED_TILE_DIR}/${REGION}.tar"
+
+    if [[ "${BUILD_EXTRACT}" == false ]]; then
+        log_info "Tile extract disabled (--no-extract) — skipping"
+        TILE_EXTRACT=""
+        return 0
+    fi
+
+    if [[ "${DRY_RUN}" == true ]]; then
+        log_dry "Would build tile extract: ${VERSIONED_TILE_DIR} → ${TILE_EXTRACT}"
+        return 0
+    fi
+
+    local extract_log="${VALHALLA_LOG_DIR}/extract-${REGION}-${RUN_ID}.log"
+    log_info "Building tile extract → ${TILE_EXTRACT}"
+    log_info "Extract log: ${extract_log}"
+
+    if [[ "${USE_DOCKER}" == true ]]; then
+        # Run the bundled python script inside the image. tile_dir → mounted
+        # tiles, tile_extract → same mount so the .tar lands in the host dir.
+        docker run --rm \
+            -v "${VERSIONED_TILE_DIR}:/valhalla/tiles" \
+            "${VALHALLA_DOCKER_IMAGE}" \
+            valhalla_build_extract \
+            --inline-config "{\"mjolnir\":{\"tile_dir\":\"/valhalla/tiles\",\"tile_extract\":\"/valhalla/tiles/${REGION}.tar\"}}" \
+            --overwrite -v \
+            2>&1 | tee -a "${extract_log}" | _log_stream "EXTRACT"
+        local extract_exit=${PIPESTATUS[0]:-$?}
+    else
+        # Native: prefer the in-tree script so it matches this checkout.
+        local extract_script="${PROJECT_ROOT}/scripts/valhalla_build_extract"
+        local runner=()
+        if [[ -x "${extract_script}" ]]; then
+            runner=(python3 "${extract_script}")
+        elif command -v valhalla_build_extract &>/dev/null; then
+            runner=(valhalla_build_extract)
+        else
+            log_error "valhalla_build_extract not found (checked ${extract_script} and PATH)"
+            return 3
+        fi
+        "${runner[@]}" \
+            --inline-config "{\"mjolnir\":{\"tile_dir\":\"${VERSIONED_TILE_DIR}\",\"tile_extract\":\"${TILE_EXTRACT}\"}}" \
+            --overwrite -v \
+            2>&1 | tee -a "${extract_log}" | _log_stream "EXTRACT"
+        local extract_exit=${PIPESTATUS[0]:-$?}
+    fi
+
+    if [[ ${extract_exit} -ne 0 ]]; then
+        log_error "Tile extract build failed (exit ${extract_exit})"
+        return 3
+    fi
+
+    if [[ ! -f "${TILE_EXTRACT}" ]]; then
+        log_error "Extract reported success but ${TILE_EXTRACT} is missing"
+        return 3
+    fi
+
+    # Verify index.bin is the FIRST member — this is the whole point of the step.
+    local first_member
+    first_member="$(tar tf "${TILE_EXTRACT}" 2>/dev/null | head -1)"
+    if [[ "${first_member}" == "index.bin" ]]; then
+        log_ok "Tile extract built with index.bin: $(du -sh "${TILE_EXTRACT}" | cut -f1)"
+    else
+        log_error "Tile extract missing index.bin as first member (found: '${first_member}')"
+        return 3
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Phase 4: Validate
 # ---------------------------------------------------------------------------
 phase_validate() {
@@ -644,6 +727,23 @@ phase_validate() {
     else
         log_error "Sample tile not readable"
         (( errors++ ))
+    fi
+
+    # Check 7: Tile extract present with index.bin (skipped if --no-extract)
+    if [[ "${BUILD_EXTRACT}" == true ]]; then
+        if [[ -f "${TILE_EXTRACT}" ]]; then
+            local first_member
+            first_member="$(tar tf "${TILE_EXTRACT}" 2>/dev/null | head -1)"
+            if [[ "${first_member}" == "index.bin" ]]; then
+                log_ok "Tile extract: $(du -sh "${TILE_EXTRACT}" | cut -f1) (index.bin present)"
+            else
+                log_error "Tile extract missing index.bin (first member: '${first_member}')"
+                (( errors++ ))
+            fi
+        else
+            log_error "Tile extract missing: ${TILE_EXTRACT}"
+            (( errors++ ))
+        fi
     fi
 
     if [[ ${errors} -gt 0 ]]; then
@@ -846,6 +946,7 @@ Options:
   --no-elevation            Skip elevation data
   --skip-build              Skip OSM download and tile build; validate existing 'latest' tiles
   --skip-geometry-mapping   Skip the geometry-mapping job after tile swap
+  --no-extract              Skip building the .tar tile extract (index.bin)
   --keep-versions <n>       Old tile versions to retain (default: 3)
   --dry-run                 Print actions without executing
   --notify-url <url>        POST webhook on completion/failure
@@ -901,6 +1002,8 @@ main() {
     DRY_RUN=false
     SKIP_BUILD=false
     SKIP_GEOMETRY_MAPPING=false
+    BUILD_EXTRACT=true
+    TILE_EXTRACT=""
     KEEP_VERSIONS_ARG=""
     NOTIFY_URL="${NOTIFY_URL:-}"
     SKIP_ELEVATION_ARG=""
@@ -914,6 +1017,7 @@ main() {
             --no-elevation)     SKIP_ELEVATION_ARG=true;   shift   ;;
             --skip-build)       SKIP_BUILD=true;            shift   ;;
             --skip-geometry-mapping) SKIP_GEOMETRY_MAPPING=true; shift ;;
+            --no-extract)       BUILD_EXTRACT=false;        shift   ;;
             --keep-versions)    KEEP_VERSIONS_ARG="$2";    shift 2 ;;
             --dry-run)          DRY_RUN=true;               shift   ;;
             --notify-url)       NOTIFY_URL="$2";            shift 2 ;;
@@ -940,6 +1044,7 @@ main() {
         phase_osm
         phase_build
     fi
+    phase_extract
     phase_validate
     phase_s3_sync
     phase_swap_latest

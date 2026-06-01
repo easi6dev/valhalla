@@ -473,6 +473,63 @@ build_tiles() {
             fi
         fi
 
+        # Build tile extract (.tar with embedded index.bin)
+        # valhalla_build_extract packs the tile_dir into a single mmap-able tar
+        # and writes index.bin as the FIRST member (fixed-width {offset, tile_id,
+        # size} records). That lets the routing engine init tile_extract_t in
+        # milliseconds without scanning the whole tar, and removes the singleton
+        # constraint on runtime tileset reloading (valhalla/valhalla#3117, PR
+        # #3281). A plain `tar` would NOT write this index. Set
+        # BUILD_EXTRACT=false (env/config) to skip.
+        if [[ "${BUILD_EXTRACT:-true}" == true ]]; then
+            echo ""
+            print_status "Building tile extract (.tar with index.bin)..."
+            TILE_EXTRACT="${TILE_DIR}/${region}.tar"
+
+            if [[ "${USE_DOCKER}" == true ]]; then
+                # Reuse the tiles mount; build the tar in-place inside /valhalla/tiles.
+                DOCKER_EXTRACT_RUN_CMD=(docker run --rm
+                    -v "${DOCKER_TILE_PATH}:/valhalla/tiles"
+                    "${docker_image}"
+                    valhalla_build_extract
+                    --inline-config "{\"mjolnir\":{\"tile_dir\":\"/valhalla/tiles\",\"tile_extract\":\"/valhalla/tiles/${region}.tar\"}}"
+                    --overwrite -v
+                )
+                if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname -s)" == CYGWIN* ]]; then
+                    MSYS_NO_PATHCONV=1 "${DOCKER_EXTRACT_RUN_CMD[@]}" 2>&1 | tee -a "${BUILD_LOG}" || true
+                else
+                    "${DOCKER_EXTRACT_RUN_CMD[@]}" 2>&1 | tee -a "${BUILD_LOG}" || true
+                fi
+            else
+                # Native: prefer the in-tree python script so it matches this checkout.
+                EXTRACT_SCRIPT="${PROJECT_ROOT}/scripts/valhalla_build_extract"
+                if [[ -x "${EXTRACT_SCRIPT}" ]]; then
+                    EXTRACT_RUNNER=(python3 "${EXTRACT_SCRIPT}")
+                elif command -v valhalla_build_extract &> /dev/null; then
+                    EXTRACT_RUNNER=(valhalla_build_extract)
+                else
+                    EXTRACT_RUNNER=()
+                    print_info "valhalla_build_extract not found — skipping extract (non-critical)"
+                fi
+                if [[ ${#EXTRACT_RUNNER[@]} -gt 0 ]]; then
+                    "${EXTRACT_RUNNER[@]}" \
+                        --inline-config "{\"mjolnir\":{\"tile_dir\":\"${TILE_DIR}\",\"tile_extract\":\"${TILE_EXTRACT}\"}}" \
+                        --overwrite -v 2>&1 | tee -a "${BUILD_LOG}" || true
+                fi
+            fi
+
+            # Verify index.bin is the first member — the whole point of the step.
+            if [[ -f "${TILE_EXTRACT}" ]]; then
+                if [[ "$(tar tf "${TILE_EXTRACT}" 2>/dev/null | head -1)" == "index.bin" ]]; then
+                    print_success "Tile extract built: ${TILE_EXTRACT} ($(du -sh "${TILE_EXTRACT}" | cut -f1), index.bin present)"
+                else
+                    print_error "Tile extract built but index.bin is not the first member"
+                fi
+            else
+                print_info "Tile extract was not created (non-critical)"
+            fi
+        fi
+
         # Cleanup temp config
         rm -f "${TEMP_CONFIG}"
 
