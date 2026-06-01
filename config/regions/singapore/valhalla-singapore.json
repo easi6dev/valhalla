@@ -1,9 +1,9 @@
 {
   "mjolnir": {
-    "tile_dir": "data/valhalla_tiles/singapore",
+    "tile_dir": "data/valhalla_tiles/singapore/latest",
     "admin": "data/admin_data/admins.sqlite",
     "timezone": "data/admin_data/timezones.sqlite",
-    "tile_extract": "data/valhalla_tiles/singapore.tar",
+    "tile_extract": "data/valhalla_tiles/singapore/latest/singapore.tar",
     "id_table_size": 1300000000,
     "max_concurrent_reader_users": 4,
     "max_cache_size": 1073741824,
@@ -55,7 +55,12 @@
       "color": true
     },
     "source_to_target_algorithm": "select_optimal",
-    "extended_search": false
+    "extended_search": false,
+    "clear_reserved_memory": true,
+    "max_reserved_labels_count_astar": 1000000,
+    "max_reserved_labels_count_bidir_astar": 500000,
+    "max_reserved_labels_count_dijkstras": 2000000,
+    "max_reserved_labels_count_bidir_dijkstras": 1000000
   },
   "odin": {
     "logging": {

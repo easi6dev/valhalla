@@ -131,21 +131,52 @@ object RegionConfigFactory {
             )
         }
 
+        // Whether to serve the mmap'd `<region>.tar` extract (with index.bin) and
+        // resolve tiles through the pipeline's `latest` symlink, vs. reading loose
+        // .gph files directly. Priority: regions.json `use_tile_extract` >
+        // VALHALLA_USE_TILE_EXTRACT env > default (true). The tar gives shared
+        // read-only tile memory across threads and millisecond init via index.bin
+        // (valhalla/valhalla#3117, PR #3281).
+        val useTileExtract = resolveUseTileExtract(regionConfig)
+
         // Get tile directory
-        // Priority: 1. Parameter override, 2. Construct from VALHALLA_TILE_DIR + region subdir
+        // Priority: 1. Parameter override, 2. Construct from VALHALLA_TILE_DIR +
+        //           region subdir, appending the `latest` symlink when serving
+        //           the pipeline-produced extract.
+        val regionSubdir = regionConfig.getString("tile_dir")
         val resolvedTileDir = tileDir ?: run {
             val tileDirRoot = getTileDirRoot()
-            val regionSubdir = regionConfig.getString("tile_dir")
-            "$tileDirRoot/$regionSubdir"
+            if (useTileExtract) "$tileDirRoot/$regionSubdir/latest"
+            else "$tileDirRoot/$regionSubdir"
         }
         val absoluteTileDir = File(resolvedTileDir).canonicalPath.replace("\\", "/")
+
+        // The extract tar lives inside the resolved tile dir, named after the
+        // region (matches the pipeline output: `<tile_dir>/<region>.tar`).
+        val tileExtract = if (useTileExtract) "$absoluteTileDir/$regionSubdir.tar" else null
 
         // Build Valhalla configuration
         return buildValhallaConfig(
             regionConfig = regionConfig,
             tileDir = absoluteTileDir,
+            tileExtract = tileExtract,
             enableTraffic = enableTraffic
         )
+    }
+
+    /**
+     * Resolve whether to use the mmap'd tile extract (.tar) for a region.
+     *
+     * Priority: regions.json `use_tile_extract` > VALHALLA_USE_TILE_EXTRACT env
+     * > system property `valhalla.use.tile.extract` > default (true).
+     */
+    private fun resolveUseTileExtract(regionConfig: JSONObject): Boolean {
+        if (regionConfig.has("use_tile_extract")) {
+            return regionConfig.getBoolean("use_tile_extract")
+        }
+        val envOrProp = System.getenv("VALHALLA_USE_TILE_EXTRACT")
+            ?: System.getProperty("valhalla.use.tile.extract")
+        return envOrProp?.toBooleanStrictOrNull() ?: true
     }
 
     /**
@@ -154,6 +185,7 @@ object RegionConfigFactory {
     private fun buildValhallaConfig(
         regionConfig: JSONObject,
         tileDir: String,
+        tileExtract: String? = null,
         enableTraffic: Boolean
     ): String {
         // Get costing options if present
@@ -169,11 +201,19 @@ object RegionConfigFactory {
             """
         } else ""
 
+        // When set, the engine memory-maps this tar (shared read-only tiles across
+        // threads + index.bin fast init). tile_dir is kept as a fallback the engine
+        // uses if the extract is absent.
+        val tileExtractBlock = if (tileExtract != null) {
+            """"tile_extract": "$tileExtract",
+            """
+        } else ""
+
         return """
         {
           "mjolnir": {
             "tile_dir": "$tileDir",
-            ${trafficBlock}"max_cache_size": 1073741824,
+            $tileExtractBlock${trafficBlock}"max_cache_size": 1073741824,
             "concurrency": 4
           },
           "loki": {
@@ -202,7 +242,12 @@ object RegionConfigFactory {
           },
           "thor": {
             "source_to_target_algorithm": "select_optimal",
-            "extended_search": false
+            "extended_search": false,
+            "clear_reserved_memory": true,
+            "max_reserved_labels_count_astar": 1000000,
+            "max_reserved_labels_count_bidir_astar": 500000,
+            "max_reserved_labels_count_dijkstras": 2000000,
+            "max_reserved_labels_count_bidir_dijkstras": 1000000
           },
           "meili": {
             "mode": "auto",
