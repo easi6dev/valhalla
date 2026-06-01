@@ -1,3 +1,4 @@
+#include "baldr/graphreader.h"
 #include "baldr/rapidjson_utils.h"
 #include "config.h"
 #include "midgard/logging.h"
@@ -216,6 +217,80 @@ JNIEXPORT void JNICALL Java_global_tada_valhalla_Actor_nativeDestroy(JNIEnv* /* 
   if (handle != 0) {
     vt::actor_t* actor = handle_to_actor(handle);
     delete actor;
+  }
+}
+
+/**
+ * Creates a shared GraphReader with SynchronizedTileCache so it can be safely
+ * used by multiple Actor instances concurrently.
+ *
+ * Class:     global_tada_valhalla_Actor
+ * Method:    nativeCreateReader
+ * Signature: (Ljava/lang/String;)J
+ */
+JNIEXPORT jlong JNICALL Java_global_tada_valhalla_Actor_nativeCreateReader(JNIEnv* env,
+                                                                             jclass /* cls */,
+                                                                             jstring config_str) {
+  try {
+    std::string config = jstring_to_string(env, config_str);
+    auto pt = configure(config);
+    // Force SynchronizedTileCache so the reader is safe for concurrent Actor access.
+    pt.put("mjolnir.global_synchronized_cache", true);
+    auto* reader = new valhalla::baldr::GraphReader(pt.get_child("mjolnir"));
+    return reinterpret_cast<jlong>(reader);
+  } catch (const std::exception& e) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException", e.what());
+    return 0;
+  } catch (...) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException",
+                       "Unknown error creating shared reader");
+    return 0;
+  }
+}
+
+/**
+ * Creates a new Actor that shares an existing GraphReader.
+ * The reader is NOT owned by this Actor — the caller must destroy it separately
+ * via nativeDestroyReader after all Actors using it have been destroyed.
+ *
+ * Class:     global_tada_valhalla_Actor
+ * Method:    nativeCreateWithSharedReader
+ * Signature: (Ljava/lang/String;J)J
+ */
+JNIEXPORT jlong JNICALL Java_global_tada_valhalla_Actor_nativeCreateWithSharedReader(
+    JNIEnv* env,
+    jobject /* obj */,
+    jstring config_str,
+    jlong reader_handle) {
+  try {
+    std::string config = jstring_to_string(env, config_str);
+    auto pt = configure(config);
+    auto& reader = *reinterpret_cast<valhalla::baldr::GraphReader*>(reader_handle);
+    vt::actor_t* actor = new vt::actor_t(pt, reader, true);
+    return actor_to_handle(actor);
+  } catch (const std::exception& e) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException", e.what());
+    return 0;
+  } catch (...) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException",
+                       "Unknown error creating actor with shared reader");
+    return 0;
+  }
+}
+
+/**
+ * Destroys a shared GraphReader created by nativeCreateReader.
+ * Must only be called after all Actors that use this reader have been destroyed.
+ *
+ * Class:     global_tada_valhalla_Actor
+ * Method:    nativeDestroyReader
+ * Signature: (J)V
+ */
+JNIEXPORT void JNICALL Java_global_tada_valhalla_Actor_nativeDestroyReader(JNIEnv* /* env */,
+                                                                             jclass /* cls */,
+                                                                             jlong reader_handle) {
+  if (reader_handle != 0) {
+    delete reinterpret_cast<valhalla::baldr::GraphReader*>(reader_handle);
   }
 }
 
