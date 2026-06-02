@@ -131,20 +131,90 @@ object RegionConfigFactory {
             )
         }
 
+        // Whether to serve the mmap'd `<region>.tar` extract (with index.bin) and
+        // resolve tiles through the pipeline's `latest` symlink, vs. reading loose
+        // .gph files directly. Priority: regions.json `use_tile_extract` >
+        // VALHALLA_USE_TILE_EXTRACT env > default (true). The tar gives shared
+        // read-only tile memory across threads and millisecond init via index.bin
+        // (valhalla/valhalla#3117, PR #3281).
+        val useTileExtract = resolveUseTileExtract(regionConfig)
+
         // Get tile directory
-        // Priority: 1. Parameter override, 2. Construct from VALHALLA_TILE_DIR + region subdir
+        // Priority: 1. Parameter override, 2. Construct from VALHALLA_TILE_DIR +
+        //           region subdir, appending the `latest` symlink when serving
+        //           the pipeline-produced extract.
+        // The subdir resolves through `tile_group` (shared tiles, e.g. tri-state)
+        // when present, otherwise the region's own `tile_dir` (Singapore-style).
+        val regionSubdir = resolveTileSubdir(regionConfig, regionsConfig)
         val resolvedTileDir = tileDir ?: run {
             val tileDirRoot = getTileDirRoot()
-            val regionSubdir = regionConfig.getString("tile_dir")
-            "$tileDirRoot/$regionSubdir"
+            if (useTileExtract) "$tileDirRoot/$regionSubdir/latest"
+            else "$tileDirRoot/$regionSubdir"
         }
         val absoluteTileDir = File(resolvedTileDir).canonicalPath.replace("\\", "/")
+
+        // The extract tar lives inside the resolved tile dir, named after the
+        // region (matches the pipeline output: `<tile_dir>/<region>.tar`).
+        val tileExtract = if (useTileExtract) "$absoluteTileDir/$regionSubdir.tar" else null
 
         // Build Valhalla configuration
         return buildValhallaConfig(
             regionConfig = regionConfig,
             tileDir = absoluteTileDir,
+            tileExtract = tileExtract,
             enableTraffic = enableTraffic
+        )
+    }
+
+    /**
+     * Resolve whether to use the mmap'd tile extract (.tar) for a region.
+     *
+     * Priority: regions.json `use_tile_extract` > VALHALLA_USE_TILE_EXTRACT env
+     * > system property `valhalla.use.tile.extract` > default (true).
+     */
+    private fun resolveUseTileExtract(regionConfig: JSONObject): Boolean {
+        if (regionConfig.has("use_tile_extract")) {
+            return regionConfig.getBoolean("use_tile_extract")
+        }
+        val envOrProp = System.getenv("VALHALLA_USE_TILE_EXTRACT")
+            ?: System.getProperty("valhalla.use.tile.extract")
+        return envOrProp?.toBooleanStrictOrNull() ?: true
+    }
+
+    /**
+     * Resolve the tile subdirectory name for a region.
+     *
+     * Supports two layouts:
+     * 1. Shared tile group — region has `"tile_group": "<group>"`; the subdir is
+     *    looked up from `tile_groups.<group>.tile_dir`. Multiple regions can share
+     *    one tile set (e.g. new_york / new_jersey / connecticut → "nyc_tri_state").
+     * 2. Direct (Singapore-style) — region has its own `"tile_dir"`.
+     *
+     * `tile_group` takes precedence when both are present.
+     *
+     * @throws IllegalStateException if the region declares neither, or names a
+     *         `tile_group` that is not defined in the `tile_groups` block.
+     */
+    private fun resolveTileSubdir(regionConfig: JSONObject, fullConfig: JSONObject): String {
+        if (regionConfig.has("tile_group")) {
+            val groupName = regionConfig.getString("tile_group")
+            val groups = fullConfig.optJSONObject("tile_groups")
+                ?: throw IllegalStateException(
+                    "Region references tile_group '$groupName' but no 'tile_groups' block exists in regions.json"
+                )
+            if (!groups.has(groupName)) {
+                throw IllegalStateException(
+                    "Region references undefined tile_group '$groupName'. " +
+                    "Defined groups: ${groups.keys().asSequence().toList().joinToString(", ")}"
+                )
+            }
+            return groups.getJSONObject(groupName).getString("tile_dir")
+        }
+        if (regionConfig.has("tile_dir")) {
+            return regionConfig.getString("tile_dir")
+        }
+        throw IllegalStateException(
+            "Region configuration must define either 'tile_dir' or 'tile_group'"
         )
     }
 
@@ -154,6 +224,7 @@ object RegionConfigFactory {
     private fun buildValhallaConfig(
         regionConfig: JSONObject,
         tileDir: String,
+        tileExtract: String? = null,
         enableTraffic: Boolean
     ): String {
         // Get costing options if present
@@ -169,11 +240,19 @@ object RegionConfigFactory {
             """
         } else ""
 
+        // When set, the engine memory-maps this tar (shared read-only tiles across
+        // threads + index.bin fast init). tile_dir is kept as a fallback the engine
+        // uses if the extract is absent.
+        val tileExtractBlock = if (tileExtract != null) {
+            """"tile_extract": "$tileExtract",
+            """
+        } else ""
+
         return """
         {
           "mjolnir": {
             "tile_dir": "$tileDir",
-            ${trafficBlock}"max_cache_size": 1073741824,
+            $tileExtractBlock${trafficBlock}"max_cache_size": 1073741824,
             "concurrency": 4
           },
           "loki": {
@@ -202,7 +281,12 @@ object RegionConfigFactory {
           },
           "thor": {
             "source_to_target_algorithm": "select_optimal",
-            "extended_search": false
+            "extended_search": false,
+            "clear_reserved_memory": true,
+            "max_reserved_labels_count_astar": 1000000,
+            "max_reserved_labels_count_bidir_astar": 500000,
+            "max_reserved_labels_count_dijkstras": 2000000,
+            "max_reserved_labels_count_bidir_dijkstras": 1000000
           },
           "meili": {
             "mode": "auto",
@@ -311,6 +395,11 @@ object RegionConfigFactory {
             "sg" -> "singapore"
             "th" -> "thailand"
             "my" -> "malaysia"
+            // US tri-state aliases — all three are distinct regions that share the
+            // nyc_tri_state tile group.
+            "nyc", "ny", "new_york_city", "new-york" -> "new_york"
+            "nj", "new-jersey" -> "new_jersey"
+            "ct", "conn" -> "connecticut"
             else -> region.lowercase().trim()
         }
     }
@@ -364,7 +453,9 @@ object RegionConfigFactory {
             "timezone" to regionConfig.optString("timezone", "UTC"),
             "locale" to regionConfig.optString("locale", "en"),
             "currency" to regionConfig.optString("currency", "USD"),
-            "tile_dir" to regionConfig.getString("tile_dir"),
+            // Resolves through tile_group for shared-tile regions, falls back to
+            // the region's own tile_dir for Singapore-style regions.
+            "tile_dir" to resolveTileSubdir(regionConfig, regionsConfig),
             "osm_source" to regionConfig.optString("osm_source", ""),
             "bounds" to getBoundsMap(regionConfig.getJSONObject("bounds"))
         )

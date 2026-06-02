@@ -71,11 +71,140 @@
       "timezone": "Asia/Bangkok",
       "locale": "th-TH",
       "currency": "THB"
+    },
+    "new_york": {
+      "name": "New York",
+      "enabled": true,
+      "tile_group": "nyc_tri_state",
+      "bounds": {
+        "min_lat": 40.47,
+        "max_lat": 45.02,
+        "min_lon": -79.77,
+        "max_lon": -71.78
+      },
+      "default_costing": "auto",
+      "supported_costings": ["auto", "bicycle", "motorcycle", "taxi", "truck"],
+      "costing_options": {
+        "auto": {
+          "maneuver_penalty": 5,
+          "country_crossing_penalty": 600,
+          "ferry_cost": 300,
+          "use_ferry": 0.5,
+          "shortest": false,
+          "speed_types": ["freeflow", "constrained", "predicted", "current"],
+          "top_speed": 110
+        },
+        "motorcycle": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 1.0,
+          "top_speed": 110
+        },
+        "taxi": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 1.0,
+          "top_speed": 110
+        }
+      },
+      "timezone": "America/New_York",
+      "locale": "en-US",
+      "currency": "USD"
+    },
+    "new_jersey": {
+      "name": "New Jersey",
+      "enabled": true,
+      "tile_group": "nyc_tri_state",
+      "bounds": {
+        "min_lat": 38.79,
+        "max_lat": 41.36,
+        "min_lon": -75.56,
+        "max_lon": -73.89
+      },
+      "default_costing": "auto",
+      "supported_costings": ["auto", "bicycle", "motorcycle", "taxi", "truck"],
+      "costing_options": {
+        "auto": {
+          "maneuver_penalty": 5,
+          "country_crossing_penalty": 600,
+          "ferry_cost": 300,
+          "use_ferry": 0.5,
+          "shortest": false,
+          "speed_types": ["freeflow", "constrained", "predicted", "current"],
+          "top_speed": 110
+        },
+        "motorcycle": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 1.0,
+          "top_speed": 110
+        },
+        "taxi": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 1.0,
+          "top_speed": 110
+        }
+      },
+      "timezone": "America/New_York",
+      "locale": "en-US",
+      "currency": "USD"
+    },
+    "connecticut": {
+      "name": "Connecticut",
+      "enabled": true,
+      "tile_group": "nyc_tri_state",
+      "bounds": {
+        "min_lat": 40.95,
+        "max_lat": 42.05,
+        "min_lon": -73.73,
+        "max_lon": -71.79
+      },
+      "default_costing": "auto",
+      "supported_costings": ["auto", "bicycle", "motorcycle", "taxi", "truck"],
+      "costing_options": {
+        "auto": {
+          "maneuver_penalty": 5,
+          "country_crossing_penalty": 600,
+          "ferry_cost": 300,
+          "use_ferry": 0.5,
+          "shortest": false,
+          "speed_types": ["freeflow", "constrained", "predicted", "current"],
+          "top_speed": 110
+        },
+        "motorcycle": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 1.0,
+          "top_speed": 110
+        },
+        "taxi": {
+          "maneuver_penalty": 5,
+          "use_highways": 1.0,
+          "use_tolls": 1.0,
+          "top_speed": 110
+        }
+      },
+      "timezone": "America/New_York",
+      "locale": "en-US",
+      "currency": "USD"
+    }
+  },
+  "tile_groups": {
+    "nyc_tri_state": {
+      "tile_dir": "nyc_tri_state",
+      "description": "Shared tiles for New York, New Jersey, and Connecticut (tri-state). Built once from the merged OSM of all three states so routing can cross state lines (e.g. NYC <-> Newark NJ).",
+      "osm_sources": [
+        "https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf",
+        "https://download.geofabrik.de/north-america/us/new-jersey-latest.osm.pbf",
+        "https://download.geofabrik.de/north-america/us/connecticut-latest.osm.pbf"
+      ],
+      "osm_file": "nyc_tri_state-latest.osm.pbf"
     }
   },
   "metadata": {
-    "version": "1.0.0",
-    "last_updated": "2026-02-24",
+    "version": "1.1.0",
+    "last_updated": "2026-06-01",
     "description": "Multi-region configuration for Valhalla routing engine with JNI bindings",
     "tile_dir_config": {
       "description": "Configure tile directory root via VALHALLA_TILE_DIR environment variable",

@@ -139,7 +139,12 @@ get_region_info() {
 # Download OSM data
 download_osm() {
     local region=$1
-    local output_file="${DATA_DIR}/${region}-latest.osm.pbf"
+    # Honor an explicit osm_file override from regions.json (e.g. a region that
+    # is part of a tile_group, or a custom-named extract) before defaulting to
+    # the conventional <region>-latest.osm.pbf.
+    local osm_file_override
+    osm_file_override=$(jq -r ".regions.${region}.osm_file // empty" "${REGIONS_CONFIG}")
+    local output_file="${DATA_DIR}/${osm_file_override:-${region}-latest.osm.pbf}"
     local md5_url="${OSM_SOURCE}.md5"
 
     print_header "Downloading OSM Data for ${REGION_NAME}"

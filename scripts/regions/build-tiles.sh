@@ -121,7 +121,9 @@ check_dependencies() {
     # Check for valhalla_build_tiles binary (config file path, PATH, or Docker fallback)
     USE_DOCKER=false
     local bin="${VALHALLA_BUILD_TILES_BIN:-}"
-    local docker_image="${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development}"
+    # Global so build_tiles() can reference it when constructing docker commands.
+    # Override per-cluster via VALHALLA_DOCKER_IMAGE (e.g. US cluster ECR registry).
+    DOCKER_IMAGE="${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development}"
     if [[ -n "${bin}" && -x "${bin}" ]]; then
         print_info "Using Valhalla binary: ${bin}"
         # Make it available as valhalla_build_tiles for the rest of the script
@@ -129,11 +131,11 @@ check_dependencies() {
     elif command -v valhalla_build_tiles &> /dev/null; then
         print_info "Using native Valhalla installation (system PATH)"
     elif command -v docker &> /dev/null; then
-        if ! docker image inspect "${docker_image}" &> /dev/null; then
-            print_info "Pulling Docker image: ${docker_image}"
-            docker pull "${docker_image}"
+        if ! docker image inspect "${DOCKER_IMAGE}" &> /dev/null; then
+            print_info "Pulling Docker image: ${DOCKER_IMAGE}"
+            docker pull "${DOCKER_IMAGE}"
         fi
-        print_info "Using Docker-based Valhalla (${docker_image})"
+        print_info "Using Docker-based Valhalla (${DOCKER_IMAGE})"
         USE_DOCKER=true
     else
         missing_deps+=("valhalla_build_tiles or docker")
@@ -178,13 +180,33 @@ get_region_config() {
 
     # Extract region info
     REGION_NAME=$(jq -r ".regions.${region}.name" "${REGIONS_CONFIG}")
-    REGION_TILE_SUBDIR=$(jq -r ".regions.${region}.tile_dir" "${REGIONS_CONFIG}")
 
-    # Tile output: TILE_DIR_ROOT (from env/flag) + region subdir from regions.json
+    # Tile subdir resolution: a region either has its own tile_dir
+    # (Singapore-style) or a tile_group (shared tiles). For a group, the subdir
+    # and the merged OSM filename come from the tile_groups block.
+    local tile_group
+    tile_group=$(jq -r ".regions.${region}.tile_group // empty" "${REGIONS_CONFIG}")
+    if [[ -n "${tile_group}" ]]; then
+        REGION_TILE_SUBDIR=$(jq -r ".tile_groups.${tile_group}.tile_dir" "${REGIONS_CONFIG}")
+        if [[ -z "${REGION_TILE_SUBDIR}" || "${REGION_TILE_SUBDIR}" == "null" ]]; then
+            print_error "Region '${region}' references tile_group '${tile_group}' but it has no tile_dir in tile_groups"
+            exit 1
+        fi
+        # Group regions read the merged OSM file produced by merge-osm.sh.
+        local group_osm_file
+        group_osm_file=$(jq -r ".tile_groups.${tile_group}.osm_file // empty" "${REGIONS_CONFIG}")
+        OSM_FILE="${OSM_DIR}/${group_osm_file:-${tile_group}-latest.osm.pbf}"
+        print_info "Tile group:     ${tile_group} (shared tiles)"
+    else
+        REGION_TILE_SUBDIR=$(jq -r ".regions.${region}.tile_dir" "${REGIONS_CONFIG}")
+        # OSM input: honor an explicit osm_file override, else <region>-latest.osm.pbf
+        local region_osm_file
+        region_osm_file=$(jq -r ".regions.${region}.osm_file // empty" "${REGIONS_CONFIG}")
+        OSM_FILE="${OSM_DIR}/${region_osm_file:-${region}-latest.osm.pbf}"
+    fi
+
+    # Tile output: TILE_DIR_ROOT (from env/flag) + resolved subdir
     TILE_DIR="${TILE_DIR_ROOT}/${REGION_TILE_SUBDIR}"
-
-    # OSM input: OSM_DIR (from env/flag) + standard filename
-    OSM_FILE="${OSM_DIR}/${region}-latest.osm.pbf"
 
     # Config template: look for region-specific template, fall back to generic
     local region_template="${PROJECT_ROOT}/config/regions/${region}/valhalla-${region}.json"
@@ -254,6 +276,13 @@ build_tiles() {
         tile_count=$(find "${TILE_DIR}" -name "*.gph" 2>/dev/null | wc -l)
         print_info "Existing tile count: ${tile_count}"
         echo ""
+        # In CI/Docker/cron there is no TTY — never block on a prompt. Default to
+        # using the existing tiles (the run-tile-pipeline.sh wrapper handles
+        # versioned rebuilds; --clean forces a fresh build here).
+        if [[ ! -t 0 ]]; then
+            print_info "Non-interactive (no TTY) — using existing tiles. Pass --clean to force rebuild."
+            return 0
+        fi
         read -p "Rebuild tiles? This will delete existing tiles. (y/N): " response
         if [[ ! "${response}" =~ ^[Yy]$ ]]; then
             print_success "Using existing tiles"
@@ -362,10 +391,10 @@ build_tiles() {
             -v "${DOCKER_OSM_PATH}:/valhalla/osm"
             -v "${DOCKER_ADMIN_PATH}:/valhalla/admin"
             -v "${DOCKER_CFG_PATH}:/valhalla/config"
-            "${docker_image}"
+            "${DOCKER_IMAGE}"
             valhalla_build_tiles
             -c "/valhalla/config/$(basename "${DOCKER_CONFIG}")"
-            "/valhalla/osm/${region}-latest.osm.pbf"
+            "/valhalla/osm/$(basename "${OSM_FILE}")"
         )
 
         if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname -s)" == CYGWIN* ]]; then
@@ -441,10 +470,10 @@ build_tiles() {
                     -v "${DOCKER_OSM_PATH}:/valhalla/osm"
                     -v "${DOCKER_ADMIN_PATH}:/valhalla/admin"
                     -v "${DOCKER_CFG_PATH}:/valhalla/config"
-                    "${docker_image}"
+                    "${DOCKER_IMAGE}"
                     valhalla_build_admins
                     -c "/valhalla/config/$(basename "${DOCKER_ADMIN_CONFIG}")"
-                    "/valhalla/osm/${region}-latest.osm.pbf"
+                    "/valhalla/osm/$(basename "${OSM_FILE}")"
                 )
 
                 if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname -s)" == CYGWIN* ]]; then
@@ -470,6 +499,63 @@ build_tiles() {
                 else
                     print_info "Admin boundaries build failed (non-critical)"
                 fi
+            fi
+        fi
+
+        # Build tile extract (.tar with embedded index.bin)
+        # valhalla_build_extract packs the tile_dir into a single mmap-able tar
+        # and writes index.bin as the FIRST member (fixed-width {offset, tile_id,
+        # size} records). That lets the routing engine init tile_extract_t in
+        # milliseconds without scanning the whole tar, and removes the singleton
+        # constraint on runtime tileset reloading (valhalla/valhalla#3117, PR
+        # #3281). A plain `tar` would NOT write this index. Set
+        # BUILD_EXTRACT=false (env/config) to skip.
+        if [[ "${BUILD_EXTRACT:-true}" == true ]]; then
+            echo ""
+            print_status "Building tile extract (.tar with index.bin)..."
+            TILE_EXTRACT="${TILE_DIR}/${region}.tar"
+
+            if [[ "${USE_DOCKER}" == true ]]; then
+                # Reuse the tiles mount; build the tar in-place inside /valhalla/tiles.
+                DOCKER_EXTRACT_RUN_CMD=(docker run --rm
+                    -v "${DOCKER_TILE_PATH}:/valhalla/tiles"
+                    "${DOCKER_IMAGE}"
+                    valhalla_build_extract
+                    --inline-config "{\"mjolnir\":{\"tile_dir\":\"/valhalla/tiles\",\"tile_extract\":\"/valhalla/tiles/${region}.tar\"}}"
+                    --overwrite -v
+                )
+                if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname -s)" == CYGWIN* ]]; then
+                    MSYS_NO_PATHCONV=1 "${DOCKER_EXTRACT_RUN_CMD[@]}" 2>&1 | tee -a "${BUILD_LOG}" || true
+                else
+                    "${DOCKER_EXTRACT_RUN_CMD[@]}" 2>&1 | tee -a "${BUILD_LOG}" || true
+                fi
+            else
+                # Native: prefer the in-tree python script so it matches this checkout.
+                EXTRACT_SCRIPT="${PROJECT_ROOT}/scripts/valhalla_build_extract"
+                if [[ -x "${EXTRACT_SCRIPT}" ]]; then
+                    EXTRACT_RUNNER=(python3 "${EXTRACT_SCRIPT}")
+                elif command -v valhalla_build_extract &> /dev/null; then
+                    EXTRACT_RUNNER=(valhalla_build_extract)
+                else
+                    EXTRACT_RUNNER=()
+                    print_info "valhalla_build_extract not found — skipping extract (non-critical)"
+                fi
+                if [[ ${#EXTRACT_RUNNER[@]} -gt 0 ]]; then
+                    "${EXTRACT_RUNNER[@]}" \
+                        --inline-config "{\"mjolnir\":{\"tile_dir\":\"${TILE_DIR}\",\"tile_extract\":\"${TILE_EXTRACT}\"}}" \
+                        --overwrite -v 2>&1 | tee -a "${BUILD_LOG}" || true
+                fi
+            fi
+
+            # Verify index.bin is the first member — the whole point of the step.
+            if [[ -f "${TILE_EXTRACT}" ]]; then
+                if [[ "$(tar tf "${TILE_EXTRACT}" 2>/dev/null | head -1)" == "index.bin" ]]; then
+                    print_success "Tile extract built: ${TILE_EXTRACT} ($(du -sh "${TILE_EXTRACT}" | cut -f1), index.bin present)"
+                else
+                    print_error "Tile extract built but index.bin is not the first member"
+                fi
+            else
+                print_info "Tile extract was not created (non-critical)"
             fi
         fi
 
@@ -598,6 +684,16 @@ main() {
     ADMIN_DIR="${ADMIN_DIR:-${VALHALLA_ADMIN_DIR:-${PROJECT_ROOT}/data/admin_data}}"
     LOG_DIR="${LOG_DIR:-${VALHALLA_LOG_DIR:-${PROJECT_ROOT}/logs}}"
     REGIONS_CONFIG="${REGIONS_CONFIG:-${VALHALLA_REGIONS_CONFIG:-${PROJECT_ROOT}/config/regions/regions.json}}"
+
+    # Docker volume mounts require absolute paths. `realpath -m` resolves without
+    # requiring the path to exist yet (dirs are created later). Skip if realpath
+    # is unavailable (rare); the dirs are mkdir'd before use regardless.
+    if command -v realpath &>/dev/null; then
+        TILE_DIR_ROOT="$(realpath -m "${TILE_DIR_ROOT}")"
+        OSM_DIR="$(realpath -m "${OSM_DIR}")"
+        ADMIN_DIR="$(realpath -m "${ADMIN_DIR}")"
+        LOG_DIR="$(realpath -m "${LOG_DIR}")"
+    fi
 
     # Config file SKIP_ELEVATION / CLEAN_BUILD (only if not set via CLI flag)
     if [[ "${skip_elevation}" == false && "${SKIP_ELEVATION:-false}" == true ]]; then

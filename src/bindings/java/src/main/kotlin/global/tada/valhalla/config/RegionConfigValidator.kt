@@ -77,8 +77,11 @@ object RegionConfigValidator {
 
             // Validate each region
             for (regionKey in regions.keys()) {
-                val regionErrors = validateRegion(regionKey, regions.getJSONObject(regionKey), validateTiles)
+                val (regionErrors, regionWarnings) = validateRegion(
+                    regionKey, regions.getJSONObject(regionKey), validateTiles
+                )
                 errors.addAll(regionErrors.map { "[$regionKey] $it" })
+                warnings.addAll(regionWarnings.map { "[$regionKey] $it" })
             }
 
             // Validate metadata if present
@@ -99,21 +102,41 @@ object RegionConfigValidator {
     }
 
     /**
-     * Validate a single region configuration
+     * Validate a single region configuration.
+     *
+     * @return Pair of (errors, warnings). A region must declare either a direct
+     *         `tile_dir` (Singapore-style) or a `tile_group` (shared tiles, e.g.
+     *         the tri-state group). Tile-directory existence is only checked for
+     *         direct `tile_dir` regions — group regions resolve their physical
+     *         directory through the `tile_groups` block at config-build time.
      */
-    private fun validateRegion(regionKey: String, regionConfig: JSONObject, validateTiles: Boolean): List<String> {
+    private fun validateRegion(
+        regionKey: String,
+        regionConfig: JSONObject,
+        validateTiles: Boolean
+    ): Pair<List<String>, List<String>> {
         val errors = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
 
-        // Required fields
-        val requiredFields = listOf("name", "enabled", "tile_dir", "bounds")
+        // Required fields (tile_dir / tile_group handled separately below)
+        val requiredFields = listOf("name", "enabled", "bounds")
         for (field in requiredFields) {
             if (!regionConfig.has(field)) {
                 errors.add("Missing required field: '$field'")
             }
         }
 
+        // A region must have exactly one of tile_dir or tile_group.
+        val hasTileDir = regionConfig.has("tile_dir")
+        val hasTileGroup = regionConfig.has("tile_group")
+        if (!hasTileDir && !hasTileGroup) {
+            errors.add("Region must define either 'tile_dir' or 'tile_group'")
+        } else if (hasTileDir && hasTileGroup) {
+            warnings.add("Region defines both 'tile_dir' and 'tile_group'; 'tile_group' takes precedence, 'tile_dir' is ignored")
+        }
+
         if (errors.isNotEmpty()) {
-            return errors // Early return if required fields missing
+            return Pair(errors, warnings) // Early return if required fields missing
         }
 
         // Validate name
@@ -127,23 +150,32 @@ object RegionConfigValidator {
             errors.add("Field 'enabled' must be a boolean")
         }
 
-        // Validate tile_dir
-        val tileDir = regionConfig.getString("tile_dir")
-        if (tileDir.isBlank()) {
-            errors.add("Field 'tile_dir' cannot be empty")
-        } else if (validateTiles) {
-            val tileDirFile = File(tileDir)
-            if (!tileDirFile.exists()) {
-                errors.add("Tile directory does not exist: ${tileDirFile.absolutePath}")
-            } else if (!tileDirFile.isDirectory) {
-                errors.add("Tile directory is not a directory: ${tileDirFile.absolutePath}")
-            } else {
-                // Check for actual tile files
-                val hasTiles = tileDirFile.walkTopDown()
-                    .filter { it.extension == "gph" }
-                    .any()
-                if (!hasTiles) {
-                    errors.add("No tile files (.gph) found in: ${tileDirFile.absolutePath}")
+        // Validate tile_dir — only for direct (Singapore-style) regions. Group
+        // regions resolve their physical directory via tile_groups and the tiles
+        // may not exist locally (built on a separate cluster/EFS).
+        if (hasTileGroup) {
+            val tileGroup = regionConfig.getString("tile_group")
+            if (tileGroup.isBlank()) {
+                errors.add("Field 'tile_group' cannot be empty")
+            }
+        } else {
+            val tileDir = regionConfig.getString("tile_dir")
+            if (tileDir.isBlank()) {
+                errors.add("Field 'tile_dir' cannot be empty")
+            } else if (validateTiles) {
+                val tileDirFile = File(tileDir)
+                if (!tileDirFile.exists()) {
+                    errors.add("Tile directory does not exist: ${tileDirFile.absolutePath}")
+                } else if (!tileDirFile.isDirectory) {
+                    errors.add("Tile directory is not a directory: ${tileDirFile.absolutePath}")
+                } else {
+                    // Check for actual tile files
+                    val hasTiles = tileDirFile.walkTopDown()
+                        .filter { it.extension == "gph" }
+                        .any()
+                    if (!hasTiles) {
+                        errors.add("No tile files (.gph) found in: ${tileDirFile.absolutePath}")
+                    }
                 }
             }
         }
@@ -174,7 +206,7 @@ object RegionConfigValidator {
             }
         }
 
-        return errors
+        return Pair(errors, warnings)
     }
 
     /**
