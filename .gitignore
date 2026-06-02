@@ -80,6 +80,7 @@ wheelhouse
 # temporary files
 temp/
 .temp/
+output/
 
 # OSM data files and generated tiles
 data/
@@ -90,6 +91,8 @@ deploy/config/pipeline.dev.conf
 deploy/config/pipeline.test.conf
 deploy/config/pipeline.stage.conf
 deploy/config/pipeline.prod.conf
+deploy/config/pipeline.stage-us.conf
+deploy/config/pipeline.prod-us.conf
 
 # Compiled native libraries (binaries should not be committed)
 *.so

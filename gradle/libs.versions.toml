@@ -15,19 +15,24 @@
 #   }
 # ============================================
 
+# NOTE: Kept in parity with src/bindings/java/gradle/libs.versions.toml.
+# The :java-bindings subproject is built two ways — via this root catalog
+# (IDE / root `valhalla` build) and via its own standalone catalog (CLI / build
+# scripts). Both must define every accessor build.gradle.kts references, at
+# matching versions, or one context fails to resolve. Update both together.
 [versions]
 # Language versions
-kotlin = "1.9.25"
+kotlin = "2.0.21"
 java = "17"
 
 # Core dependencies
-kotlinx-coroutines = "1.8.1"
-slf4j = "2.0.13"
-logback = "1.5.6"
+kotlinx-coroutines = "1.9.0"
+slf4j = "2.0.16"
+logback = "1.5.12"
 json = "20240303"
 
 # Testing
-junit = "5.10.3"
+junit = "5.11.3"
 assertj = "3.26.3"
 
 # Build tools
@@ -35,7 +40,7 @@ gradle-kotlin-dsl = "4.4.1"
 dokka = "1.9.20"
 
 # Code quality
-detekt = "1.23.6"
+detekt = "1.23.7"
 
 # Performance
 jmh = "1.37"
@@ -50,6 +55,7 @@ kotlinx-coroutines-jdk8 = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-j
 
 # Logging
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 
 # JSON
@@ -61,6 +67,7 @@ kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit5", versio
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit" }
 junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
+junit-jupiter-params = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit" }
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
 
 # Performance benchmarking
@@ -71,7 +78,7 @@ jmh-generator-annprocess = { module = "org.openjdk.jmh:jmh-generator-annprocess"
 # Common dependency bundles
 kotlin = ["kotlin-stdlib", "kotlin-reflect", "kotlinx-coroutines-core"]
 logging = ["slf4j-api", "logback-classic"]
-testing = ["kotlin-test", "kotlin-test-junit", "junit-jupiter", "assertj-core"]
+testing = ["junit-jupiter-api", "junit-jupiter-engine", "junit-jupiter-params", "kotlin-test"]
 jmh = ["jmh-core", "jmh-generator-annprocess"]
 [plugins]
 # Kotlin
