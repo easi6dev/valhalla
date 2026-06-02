@@ -68,6 +68,10 @@ Dockerfile
 # Large data/build directories not needed in Docker build context
 data/
 logs/
+output/
+.git/
+# Local dev symlink (absolute path) — Docker context loader rejects it
+src/bindings/java/data/
 src/bindings/java/build/
 src/bindings/java/.gradle/
 .gradle/

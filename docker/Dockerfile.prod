@@ -54,9 +54,20 @@ RUN apt-get update && apt-get install -y \
     wget curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install JDK separately so a mirror failure is immediately visible
-RUN apt-get update && apt-get install -y --fix-missing openjdk-17-jdk \
-    && rm -rf /var/lib/apt/lists/*
+# Install JDK separately so a mirror failure is immediately visible.
+# security.ubuntu.com intermittently drops connections mid-download, so we
+# proactively use the reliable kernel.org mirror and raise apt's retry count.
+# NOTE: do NOT use --fix-missing here — it silently proceeds past failed
+# downloads, leaving openjdk-17-jdk installed but its *-headless dependency
+# missing (unmet-dependency state). We want a hard failure + retry instead.
+RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries && \
+    sed -i 's|http://security.ubuntu.com/ubuntu|https://mirrors.edge.kernel.org/ubuntu|g; s|http://archive.ubuntu.com/ubuntu|https://mirrors.edge.kernel.org/ubuntu|g' /etc/apt/sources.list && \
+    n=0; until [ "$n" -ge 4 ]; do \
+      apt-get update && apt-get install -y openjdk-17-jdk && break; \
+      n=$((n+1)); echo "openjdk install attempt $n failed; retrying in $((n*15))s..."; \
+      apt-get install -f -y || true; sleep $((n*15)); \
+    done; \
+    command -v javac && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /build
@@ -206,7 +217,9 @@ RUN apt-get update && apt-get install -y \
     libzmq5 libczmq4 \
     zlib1g \
     # Tile pipeline utilities
-    jq wget curl ca-certificates unzip python3 \
+    # osmium-tool: required by scripts/regions/merge-osm.sh to merge the US
+    # tri-state OSM extracts (run-tile-pipeline-us.sh). SG pipeline doesn't use it.
+    jq wget curl ca-certificates unzip python3 osmium-tool \
     && rm -rf /var/lib/apt/lists/*
 
 # Install AWS CLI v2 — required for S3 sync in the tile pipeline.
@@ -239,6 +252,16 @@ RUN valhalla_build_tiles  --version 2>&1 | head -1 \
 COPY deploy/scripts/run-tile-pipeline.sh /app/deploy/scripts/run-tile-pipeline.sh
 RUN chmod +x /app/deploy/scripts/run-tile-pipeline.sh \
     && ln -s /app/deploy/scripts/run-tile-pipeline.sh /usr/local/bin/run-tile-pipeline.sh
+
+# US tile pipeline (NYC tri-state group). Separate script from the SG pipeline so
+# US changes can never affect the Singapore production build. It delegates the OSM
+# phase to scripts/regions/merge-osm.sh, which must be present at
+# ${PROJECT_ROOT}/scripts/regions/ (PROJECT_ROOT = /app) and needs osmium-tool
+# (installed above).
+COPY deploy/scripts/run-tile-pipeline-us.sh /app/deploy/scripts/run-tile-pipeline-us.sh
+COPY scripts/regions/merge-osm.sh /app/scripts/regions/merge-osm.sh
+RUN chmod +x /app/deploy/scripts/run-tile-pipeline-us.sh /app/scripts/regions/merge-osm.sh \
+    && ln -s /app/deploy/scripts/run-tile-pipeline-us.sh /usr/local/bin/run-tile-pipeline-us.sh
 
 # Embed deploy configs (pipeline .conf files) so the pipeline can source them
 # without a separate mount. The script auto-detects pipeline.{env}.conf.
