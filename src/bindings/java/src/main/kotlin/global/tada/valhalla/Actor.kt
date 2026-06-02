@@ -259,21 +259,26 @@ class Actor(config: String) : AutoCloseable {
          * ## Supported Regions
          * - singapore (or "sg")
          * - thailand (or "th")
+         * - new_york (or "nyc"/"ny"), new_jersey ("nj"), connecticut ("ct")
+         *   — these share the "nyc_tri_state" tile group
          *
          * ## Usage Example
          * ```kotlin
-         * // Create Actor for Singapore
+         * // Create Actor for Singapore (tile dir resolved from config + VALHALLA_TILE_DIR)
          * val sgActor = Actor.createForRegion("singapore")
          *
-         * // Create Actor for Thailand with custom tile directory
-         * val thActor = Actor.createForRegion("thailand", "/custom/path/to/tiles")
+         * // Create Actor for the NY tri-state (resolves to the shared nyc_tri_state tiles)
+         * val nyActor = Actor.createForRegion("new_york")
          *
-         * // Use country code
-         * val actor = Actor.createForRegion("th", "/path/to/tiles")
+         * // Override the tile directory explicitly
+         * val thActor = Actor.createForRegion("thailand", "/custom/path/to/tiles")
          * ```
          *
-         * @param region Region name (case-insensitive: "singapore", "thailand", etc.)
-         * @param tileDir Path to tiles directory (default: "data/valhalla_tiles/{region}")
+         * @param region Region name (case-insensitive; aliases like "sg"/"nyc" supported)
+         * @param tileDir Optional explicit tiles directory. When null (default), the
+         *   directory is resolved from regions.json — honoring `tile_group` (shared
+         *   tiles, e.g. tri-state), the `VALHALLA_TILE_DIR` root, and the `latest`
+         *   symlink / tile extract. Pass a value only to override that resolution.
          * @param enableTraffic Enable traffic-aware routing (default: false)
          * @return Actor instance configured for the specified region
          * @throws IllegalArgumentException if region is not supported
@@ -282,7 +287,7 @@ class Actor(config: String) : AutoCloseable {
         @JvmOverloads
         fun createForRegion(
             region: String,
-            tileDir: String = "data/valhalla_tiles/${region.lowercase()}",
+            tileDir: String? = null,
             enableTraffic: Boolean = false
         ): Actor {
             val config = global.tada.valhalla.config.RegionConfigFactory.buildConfig(

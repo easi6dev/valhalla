@@ -143,7 +143,9 @@ object RegionConfigFactory {
         // Priority: 1. Parameter override, 2. Construct from VALHALLA_TILE_DIR +
         //           region subdir, appending the `latest` symlink when serving
         //           the pipeline-produced extract.
-        val regionSubdir = regionConfig.getString("tile_dir")
+        // The subdir resolves through `tile_group` (shared tiles, e.g. tri-state)
+        // when present, otherwise the region's own `tile_dir` (Singapore-style).
+        val regionSubdir = resolveTileSubdir(regionConfig, regionsConfig)
         val resolvedTileDir = tileDir ?: run {
             val tileDirRoot = getTileDirRoot()
             if (useTileExtract) "$tileDirRoot/$regionSubdir/latest"
@@ -177,6 +179,43 @@ object RegionConfigFactory {
         val envOrProp = System.getenv("VALHALLA_USE_TILE_EXTRACT")
             ?: System.getProperty("valhalla.use.tile.extract")
         return envOrProp?.toBooleanStrictOrNull() ?: true
+    }
+
+    /**
+     * Resolve the tile subdirectory name for a region.
+     *
+     * Supports two layouts:
+     * 1. Shared tile group — region has `"tile_group": "<group>"`; the subdir is
+     *    looked up from `tile_groups.<group>.tile_dir`. Multiple regions can share
+     *    one tile set (e.g. new_york / new_jersey / connecticut → "nyc_tri_state").
+     * 2. Direct (Singapore-style) — region has its own `"tile_dir"`.
+     *
+     * `tile_group` takes precedence when both are present.
+     *
+     * @throws IllegalStateException if the region declares neither, or names a
+     *         `tile_group` that is not defined in the `tile_groups` block.
+     */
+    private fun resolveTileSubdir(regionConfig: JSONObject, fullConfig: JSONObject): String {
+        if (regionConfig.has("tile_group")) {
+            val groupName = regionConfig.getString("tile_group")
+            val groups = fullConfig.optJSONObject("tile_groups")
+                ?: throw IllegalStateException(
+                    "Region references tile_group '$groupName' but no 'tile_groups' block exists in regions.json"
+                )
+            if (!groups.has(groupName)) {
+                throw IllegalStateException(
+                    "Region references undefined tile_group '$groupName'. " +
+                    "Defined groups: ${groups.keys().asSequence().toList().joinToString(", ")}"
+                )
+            }
+            return groups.getJSONObject(groupName).getString("tile_dir")
+        }
+        if (regionConfig.has("tile_dir")) {
+            return regionConfig.getString("tile_dir")
+        }
+        throw IllegalStateException(
+            "Region configuration must define either 'tile_dir' or 'tile_group'"
+        )
     }
 
     /**
@@ -356,6 +395,11 @@ object RegionConfigFactory {
             "sg" -> "singapore"
             "th" -> "thailand"
             "my" -> "malaysia"
+            // US tri-state aliases — all three are distinct regions that share the
+            // nyc_tri_state tile group.
+            "nyc", "ny", "new_york_city", "new-york" -> "new_york"
+            "nj", "new-jersey" -> "new_jersey"
+            "ct", "conn" -> "connecticut"
             else -> region.lowercase().trim()
         }
     }
@@ -409,7 +453,9 @@ object RegionConfigFactory {
             "timezone" to regionConfig.optString("timezone", "UTC"),
             "locale" to regionConfig.optString("locale", "en"),
             "currency" to regionConfig.optString("currency", "USD"),
-            "tile_dir" to regionConfig.getString("tile_dir"),
+            // Resolves through tile_group for shared-tile regions, falls back to
+            // the region's own tile_dir for Singapore-style regions.
+            "tile_dir" to resolveTileSubdir(regionConfig, regionsConfig),
             "osm_source" to regionConfig.optString("osm_source", ""),
             "bounds" to getBoundsMap(regionConfig.getJSONObject("bounds"))
         )
