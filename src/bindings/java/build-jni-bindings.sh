@@ -11,7 +11,7 @@
 # - Run from project root directory
 #
 # Usage:
-#   cd /path/to/valhallaV3
+#   cd /path/to/valhalla
 #   chmod +x build-jni-bindings.sh
 #   ./build-jni-bindings.sh
 #
