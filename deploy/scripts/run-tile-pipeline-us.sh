@@ -454,10 +454,10 @@ _download_osm() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 2 & 3: Tile Build + Admin Build
+# Phase 2 & 3: Admin Build + Tile Build (admins must precede tiles)
 # ---------------------------------------------------------------------------
 phase_build() {
-    set_phase "Phase 2: Tile Build"
+    set_phase "Phase 2: Admin Build"
 
     if [[ "${DRY_RUN}" == true ]]; then
         log_dry "Would build tiles: ${OSM_FILE} → ${VERSIONED_TILE_DIR}"
@@ -490,11 +490,16 @@ phase_build() {
     local build_config="${VALHALLA_LOG_DIR}/valhalla-build-${TILE_SUBDIR}-${RUN_ID}.json"
     _generate_build_config "${config_template}" "${build_config}"
 
+    # Admin DB must exist BEFORE tile build: valhalla_build_tiles reads
+    # admins.sqlite during its Enhance stage to stamp country/state onto each
+    # edge. Running it after the tile build (as before) produced the DB but
+    # never consumed it — tiles shipped without admin data. Non-critical: a
+    # missing admin DB only degrades admin-scoped routing, so we continue.
+    _run_admin_build "${build_config}" || log_warn "Admin build failed (non-critical — continuing)"
+
+    set_phase "Phase 3: Tile Build"
     retry "${MAX_BUILD_RETRIES}" "${BUILD_RETRY_DELAY}" "Tile build" -- \
         _run_tile_build "${build_config}"
-
-    set_phase "Phase 3: Admin Build"
-    _run_admin_build "${build_config}" || log_warn "Admin build failed (non-critical — continuing)"
 
     rm -f "${build_config}"
     log_ok "Build phase complete"
@@ -680,8 +685,14 @@ phase_extract() {
         return 3
     fi
 
+    # Read only the first tar member. `tar tf | head -1` is unsafe here: head
+    # closes the pipe after one line, tar keeps writing and hits EPIPE; since
+    # `trap '' PIPE` ignores SIGPIPE, tar exits 2, and `set -o pipefail` + the
+    # command substitution would abort the whole script (exit 2) BEFORE this
+    # check runs — even on a perfectly valid extract. `|| true` swallows tar's
+    # EPIPE exit inside the subshell; the index.bin comparison is the real check.
     local first_member
-    first_member="$(tar tf "${TILE_EXTRACT}" 2>/dev/null | head -1)"
+    first_member="$( { tar tf "${TILE_EXTRACT}" 2>/dev/null || true; } | head -n1 )"
     if [[ "${first_member}" == "index.bin" ]]; then
         log_ok "Tile extract built with index.bin: $(du -sh "${TILE_EXTRACT}" | cut -f1)"
     else
@@ -753,8 +764,10 @@ phase_validate() {
 
     if [[ "${BUILD_EXTRACT}" == true ]]; then
         if [[ -f "${TILE_EXTRACT}" ]]; then
+            # `|| true` swallows tar's EPIPE exit (head closes the pipe early;
+            # SIGPIPE is trapped, so tar exits 2 and would abort under pipefail).
             local first_member
-            first_member="$(tar tf "${TILE_EXTRACT}" 2>/dev/null | head -1)"
+            first_member="$( { tar tf "${TILE_EXTRACT}" 2>/dev/null || true; } | head -n1 )"
             if [[ "${first_member}" == "index.bin" ]]; then
                 log_ok "Tile extract: $(du -sh "${TILE_EXTRACT}" | cut -f1) (index.bin present)"
             else
