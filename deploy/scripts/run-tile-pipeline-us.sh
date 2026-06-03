@@ -1,21 +1,44 @@
 #!/bin/bash
 # =============================================================================
-# Valhalla Tile Generation Pipeline — US REGION (tri-state / tile groups)
+# Valhalla Tile Generation Pipeline — US CLUSTER (any region or tile group)
 # =============================================================================
 # Dedicated entrypoint for the US server cluster. Kept SEPARATE from
 # run-tile-pipeline.sh (Singapore/APAC) on purpose: the US cluster has its own
-# EFS mount, its own S3 bucket (us-east-1), and US regions are built from a
-# MERGED multi-state OSM (tile_groups) rather than a single Geofabrik extract.
-# Isolating the two pipelines means a change for one region can never break the
-# other's weekly production build.
+# EFS mount and its own S3 bucket (us-east-1). Isolating the two pipelines means
+# a change for one region can never break the other's weekly production build.
 #
 # Lifecycle:
-#   OSM merge → tile build → admin build → tile extract → validate → S3 sync
-#   → swap latest → cleanup
+#   OSM acquire → tile build → admin build → tile extract → validate → S3 sync
+#   → swap latest → cleanup → (geometry mapping)
 #
-# A US region (e.g. new_york) carries a "tile_group" in regions.json. All
-# regions in a group (new_york / new_jersey / connecticut → nyc_tri_state) build
-# and serve ONE shared tile set, so routing crosses state lines.
+# Tiles are written DIRECTLY to VALHALLA_TILE_DIR (set to the shared EFS mount in
+# prod/stage). Phase 6 (swap latest symlink) is what makes a new version live for
+# every reader on that EFS — there is no separate copy-to-EFS step. S3 (Phase 5)
+# is an archive. This mirrors the Singapore pipeline exactly.
+#
+# REGION RESOLUTION (region-agnostic — driven entirely by regions.json):
+# The single <region> argument is a key under .regions in regions.json. Its
+# on-disk tile layout (the "subdir") is resolved automatically:
+#
+#   • Grouped region  — region has  "tile_group": "<group>"  → tiles live under
+#     <group>'s tile_dir; OSM is MERGED from the group's osm_sources. Every
+#     member region of the group builds/serves ONE shared tile set, so routing
+#     crosses state lines. Example: new_york / new_jersey / connecticut all map
+#     to the "nyc_tri_state" group → tiles under .../nyc_tri_state/.
+#
+#   • Single region   — region has its own "tile_dir" and "osm_source" (no
+#     tile_group) → tiles under that tile_dir; OSM is a single Geofabrik extract.
+#     Same shape as Singapore on the SG pipeline. Example: a "florida" region
+#     with tile_dir="florida" → tiles under .../florida/.
+#
+# ADDING A NEW US REGION is therefore a regions.json edit only — NO change to
+# this script. Add either:
+#   (a) a single region with "tile_dir" + "osm_source", or
+#   (b) a member region with "tile_group", plus a .tile_groups.<group> entry
+#       carrying "tile_dir" + "osm_sources[]" + "osm_file".
+# Then run:  VALHALLA_ENV=prod-us ./run-tile-pipeline-us.sh <new_region>
+# (Optionally add config/regions/<region>/valhalla-<region>.json for a custom
+#  build template; otherwise the group/any template is used as a fallback.)
 #
 # Usage:
 #   ./run-tile-pipeline-us.sh <region> [OPTIONS]      # region = a US region key
@@ -454,10 +477,10 @@ _download_osm() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 2 & 3: Tile Build + Admin Build
+# Phase 2 & 3: Admin Build + Tile Build (admins must precede tiles)
 # ---------------------------------------------------------------------------
 phase_build() {
-    set_phase "Phase 2: Tile Build"
+    set_phase "Phase 2: Admin Build"
 
     if [[ "${DRY_RUN}" == true ]]; then
         log_dry "Would build tiles: ${OSM_FILE} → ${VERSIONED_TILE_DIR}"
@@ -490,11 +513,16 @@ phase_build() {
     local build_config="${VALHALLA_LOG_DIR}/valhalla-build-${TILE_SUBDIR}-${RUN_ID}.json"
     _generate_build_config "${config_template}" "${build_config}"
 
+    # Admin DB must exist BEFORE tile build: valhalla_build_tiles reads
+    # admins.sqlite during its Enhance stage to stamp country/state onto each
+    # edge. Running it after the tile build (as before) produced the DB but
+    # never consumed it — tiles shipped without admin data. Non-critical: a
+    # missing admin DB only degrades admin-scoped routing, so we continue.
+    _run_admin_build "${build_config}" || log_warn "Admin build failed (non-critical — continuing)"
+
+    set_phase "Phase 3: Tile Build"
     retry "${MAX_BUILD_RETRIES}" "${BUILD_RETRY_DELAY}" "Tile build" -- \
         _run_tile_build "${build_config}"
-
-    set_phase "Phase 3: Admin Build"
-    _run_admin_build "${build_config}" || log_warn "Admin build failed (non-critical — continuing)"
 
     rm -f "${build_config}"
     log_ok "Build phase complete"
@@ -680,8 +708,14 @@ phase_extract() {
         return 3
     fi
 
+    # Read only the first tar member. `tar tf | head -1` is unsafe here: head
+    # closes the pipe after one line, tar keeps writing and hits EPIPE; since
+    # `trap '' PIPE` ignores SIGPIPE, tar exits 2, and `set -o pipefail` + the
+    # command substitution would abort the whole script (exit 2) BEFORE this
+    # check runs — even on a perfectly valid extract. `|| true` swallows tar's
+    # EPIPE exit inside the subshell; the index.bin comparison is the real check.
     local first_member
-    first_member="$(tar tf "${TILE_EXTRACT}" 2>/dev/null | head -1)"
+    first_member="$( { tar tf "${TILE_EXTRACT}" 2>/dev/null || true; } | head -n1 )"
     if [[ "${first_member}" == "index.bin" ]]; then
         log_ok "Tile extract built with index.bin: $(du -sh "${TILE_EXTRACT}" | cut -f1)"
     else
@@ -753,8 +787,10 @@ phase_validate() {
 
     if [[ "${BUILD_EXTRACT}" == true ]]; then
         if [[ -f "${TILE_EXTRACT}" ]]; then
+            # `|| true` swallows tar's EPIPE exit (head closes the pipe early;
+            # SIGPIPE is trapped, so tar exits 2 and would abort under pipefail).
             local first_member
-            first_member="$(tar tf "${TILE_EXTRACT}" 2>/dev/null | head -1)"
+            first_member="$( { tar tf "${TILE_EXTRACT}" 2>/dev/null || true; } | head -n1 )"
             if [[ "${first_member}" == "index.bin" ]]; then
                 log_ok "Tile extract: $(du -sh "${TILE_EXTRACT}" | cut -f1) (index.bin present)"
             else
@@ -935,9 +971,14 @@ show_usage() {
     cat <<EOF
 Usage: $(basename "$0") <region> [OPTIONS]
 
-US-region tile pipeline. <region> is a US region key in regions.json that
-belongs to a tile_group (e.g. new_york / new_jersey / connecticut → nyc_tri_state).
-All regions in a group build/serve ONE shared tile set built from merged OSM.
+US-cluster tile pipeline. <region> is any US region key in regions.json. The
+on-disk tile layout is resolved from the config automatically:
+  • Grouped region (has "tile_group") → shared tiles under the group's tile_dir,
+    OSM merged from the group's sources. E.g. new_york/new_jersey/connecticut
+    → nyc_tri_state (routing crosses state lines).
+  • Single region (has its own "tile_dir" + "osm_source", no group) → tiles
+    under that tile_dir, single-source OSM. Same shape as Singapore.
+Adding a new region is a regions.json edit only — no change to this script.
 
 Options:
   --pipeline-config <path>  Path to pipeline .conf file
@@ -959,13 +1000,16 @@ Environments (VALHALLA_ENV):
   prod-us    pipeline.prod-us.conf  + Docker + US S3 + elevation
 
 Examples:
-  # Local dev — build the tri-state group via the new_york region key
-  ./run-tile-pipeline-us.sh new_york --no-elevation
+  # Grouped region — build the tri-state group via any member region key
+  ./run-tile-pipeline-us.sh new_york --no-elevation     # → tiles under nyc_tri_state/
+
+  # Single region — Singapore-style, tiles under its own tile_dir
+  ./run-tile-pipeline-us.sh florida --no-elevation      # → tiles under florida/
 
   # Production US — uses pipeline.prod-us.conf automatically
   VALHALLA_ENV=prod-us ./run-tile-pipeline-us.sh new_york
 
-  # Dry-run
+  # Dry-run (verify a newly-added region resolves correctly before a real build)
   VALHALLA_ENV=prod-us ./run-tile-pipeline-us.sh new_york --dry-run
 
   # Cron (every Tuesday 07:00 UTC = 02:00 US Eastern wall-ish):
@@ -981,6 +1025,12 @@ main() {
     if [[ $# -eq 0 ]]; then
         show_usage
         exit 1
+    fi
+
+    # Help requested as the first arg — show usage before treating it as a region.
+    if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+        show_usage
+        exit 0
     fi
 
     REGION="$1"
