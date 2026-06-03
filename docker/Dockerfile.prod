@@ -95,11 +95,11 @@ RUN --mount=type=cache,target=/root/.ccache \
     && cmake --build build-tiles \
          --target valhalla valhalla_build_tiles valhalla_build_admins \
          -j"$(nproc)" \
-    && cp build-tiles/valhalla_build_tiles build-tiles/valhalla_build_admins /usr/local/bin/ \
+    && cp build-tiles/valhalla_build_tiles build-tiles/valhalla_build_admins build-tiles/valhalla_build_extract /usr/local/bin/ \
     && find build-tiles -name 'libvalhalla*.so*' -exec cp {} /usr/local/lib/ \; \
     && ldconfig \
     && mkdir -p /usr/local/share/valhalla \
-    && echo "✅ valhalla_build_tiles + valhalla_build_admins installed"
+    && echo "✅ valhalla_build_tiles + valhalla_build_admins + valhalla_build_extract installed"
 
 # Smoke-test tile binaries
 RUN valhalla_build_tiles  --version 2>&1 | head -1 \
@@ -233,11 +233,12 @@ RUN ARCH=$(uname -m) && \
     && aws --version
 
 # Copy tile builder binaries + shared libs from builder.
-# valhalla_build_extract is a Python script (not a compiled binary) installed to
-# /usr/local/bin by `make install` (CMakeLists.txt). Both tile pipelines invoke
-# it in Phase 3.5 to pack tiles into the indexed .tar; without it the pipeline
-# fails with "valhalla_build_extract not found". Copying it to /usr/local/bin
-# satisfies the scripts' PATH-based fallback (`command -v valhalla_build_extract`).
+# valhalla_build_extract is a Python script (not a compiled binary). The builder
+# never runs `make install`; instead Step A copies it from build-tiles/ to
+# /usr/local/bin (CMake's configure_file places it there at configure time).
+# Both tile pipelines invoke it in Phase 3.5 to pack tiles into the indexed .tar;
+# without it the pipeline fails with "valhalla_build_extract not found". Copying
+# it here satisfies the scripts' PATH-based fallback (`command -v valhalla_build_extract`).
 COPY --from=builder /usr/local/bin/valhalla_build_tiles   /usr/local/bin/
 COPY --from=builder /usr/local/bin/valhalla_build_admins  /usr/local/bin/
 COPY --from=builder /usr/local/bin/valhalla_build_extract /usr/local/bin/
