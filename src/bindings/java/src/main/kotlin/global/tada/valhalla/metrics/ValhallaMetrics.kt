@@ -39,6 +39,17 @@ public object ValhallaMetrics {
     // Active instances
     private val activeActors = LongAdder()
 
+    // ── ActorPool metrics (Phase 1) ─────────────────────────────────────────
+    // NOTE: actorsInUse is the pool's *borrowed* count and is intentionally
+    // SEPARATE from activeActors (live Actor instances). Conflating the two made
+    // valhalla_active_actors report borrows instead of live actors.
+    private val poolSize = AtomicLong(0L)
+    private val actorsInUse = LongAdder()
+    private val borrowTimeouts = LongAdder()
+    private val borrowWaitSum = LongAdder()
+    private val borrowWaitCount = LongAdder()
+    private val borrowWaitMax = AtomicLong(0L)
+
     // Timing
     private val startTime = System.currentTimeMillis()
 
@@ -94,6 +105,43 @@ public object ValhallaMetrics {
     }
 
     /**
+     * Set the configured pool size (gauge). Pass 0 when the pool is closed.
+     */
+    public fun setPoolSize(size: Int) {
+        poolSize.set(size.toLong())
+    }
+
+    /** Pool borrow: an actor was checked out. */
+    public fun incrementActorsInUse() {
+        actorsInUse.increment()
+    }
+
+    /** Pool return: an actor was checked back in. */
+    public fun decrementActorsInUse() {
+        actorsInUse.decrement()
+    }
+
+    /**
+     * Record how long a pool borrow waited for a free actor (milliseconds).
+     */
+    public fun recordBorrowWait(waitMs: Long) {
+        borrowWaitSum.add(waitMs)
+        borrowWaitCount.increment()
+        var current: Long
+        do {
+            current = borrowWaitMax.get()
+            if (waitMs <= current) return
+        } while (!borrowWaitMax.compareAndSet(current, waitMs))
+    }
+
+    /**
+     * Record a borrow that timed out (pool exhausted → consumer maps to 429).
+     */
+    public fun recordBorrowTimeout() {
+        borrowTimeouts.increment()
+    }
+
+    /**
      * Get current metrics snapshot
      */
     public fun getSnapshot(): MetricsSnapshot {
@@ -120,7 +168,12 @@ public object ValhallaMetrics {
             requestRatePerSecond = requestRate,
             uptimeMs = uptime,
             requestsByRegion = requestsByRegion.mapValues { it.value.sum() },
-            requestsByCosting = requestsByCosting.mapValues { it.value.sum() }
+            requestsByCosting = requestsByCosting.mapValues { it.value.sum() },
+            poolSize = poolSize.get().toInt(),
+            actorsInUse = actorsInUse.sum().toInt(),
+            borrowTimeouts = borrowTimeouts.sum(),
+            avgBorrowWaitMs = if (borrowWaitCount.sum() > 0) borrowWaitSum.sum() / borrowWaitCount.sum() else 0L,
+            maxBorrowWaitMs = borrowWaitMax.get()
         )
     }
 
@@ -161,6 +214,28 @@ public object ValhallaMetrics {
             appendLine("# HELP valhalla_active_actors Number of active Actor instances")
             appendLine("# TYPE valhalla_active_actors gauge")
             appendLine("valhalla_active_actors ${snapshot.activeActors}")
+            appendLine()
+
+            // Actor pool (Phase 1)
+            appendLine("# HELP valhalla_pool_size Configured ActorPool size")
+            appendLine("# TYPE valhalla_pool_size gauge")
+            appendLine("valhalla_pool_size ${snapshot.poolSize}")
+            appendLine()
+
+            appendLine("# HELP valhalla_actors_in_use Actors currently borrowed from the pool")
+            appendLine("# TYPE valhalla_actors_in_use gauge")
+            appendLine("valhalla_actors_in_use ${snapshot.actorsInUse}")
+            appendLine()
+
+            appendLine("# HELP valhalla_pool_borrow_timeouts_total Borrows that timed out (pool exhausted)")
+            appendLine("# TYPE valhalla_pool_borrow_timeouts_total counter")
+            appendLine("valhalla_pool_borrow_timeouts_total ${snapshot.borrowTimeouts}")
+            appendLine()
+
+            appendLine("# HELP valhalla_pool_borrow_wait_ms Time spent waiting to borrow a pooled actor")
+            appendLine("# TYPE valhalla_pool_borrow_wait_ms summary")
+            appendLine("valhalla_pool_borrow_wait_ms{stat=\"avg\"} ${snapshot.avgBorrowWaitMs}")
+            appendLine("valhalla_pool_borrow_wait_ms{stat=\"max\"} ${snapshot.maxBorrowWaitMs}")
             appendLine()
 
             // Error rate
@@ -206,6 +281,12 @@ public object ValhallaMetrics {
         requestsByRegion.clear()
         requestsByCosting.clear()
         activeActors.reset()
+        poolSize.set(0L)
+        actorsInUse.reset()
+        borrowTimeouts.reset()
+        borrowWaitSum.reset()
+        borrowWaitCount.reset()
+        borrowWaitMax.set(0L)
     }
 
     // Private helper methods
@@ -279,7 +360,12 @@ public data class MetricsSnapshot(
     val requestRatePerSecond: Double,
     val uptimeMs: Long,
     val requestsByRegion: Map<String, Long>,
-    val requestsByCosting: Map<String, Long>
+    val requestsByCosting: Map<String, Long>,
+    val poolSize: Int = 0,
+    val actorsInUse: Int = 0,
+    val borrowTimeouts: Long = 0L,
+    val avgBorrowWaitMs: Long = 0L,
+    val maxBorrowWaitMs: Long = 0L
 ) {
     override fun toString(): String {
         return buildString {

@@ -197,4 +197,67 @@ class MultiRegionAPITest {
         assertFalse(sgConfig.contains("nyc_tri_state"))
     }
 
+    // -------------------------------------------------------------------------
+    // Phase 2 — injectable performance knobs (2026-06-04).
+    // buildConfig() defaults to the historical hardcoded values for EVERY region
+    // (zero regression for direct callers, incl. SG). Cheaper values are opt-in
+    // via explicit params (ActorPool supplies them to pooled actors only).
+    // See tasks/todo-concurrency-scaling.md.
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun `test buildConfig defaults preserve historical values for every region`() {
+        System.setProperty("valhalla.use.tile.extract", "false")
+        try {
+            // Default (no knob params) must equal the old hardcoded config for BOTH
+            // a direct-tile_dir region (SG) and a tile_group region (NYC).
+            for (region in listOf("singapore", "new_york")) {
+                val config = RegionConfigFactory.buildConfig(region = region, enableTraffic = false)
+                assertTrue(config.contains("\"max_cache_size\": 1073741824"),
+                    "$region default must keep the 1 GiB cache")
+                assertTrue(config.contains("\"minimum_reachability\": 50"),
+                    "$region default must keep reachability 50")
+                assertTrue(config.contains("\"search_cutoff\": 35000"),
+                    "$region default must keep search_cutoff 35000")
+                assertTrue(config.contains("\"concurrency\": 4"),
+                    "$region default must keep reader concurrency 4")
+                assertTrue(config.contains("\"cache_size\": 100240"),
+                    "$region default must keep the Meili grid cache 100240")
+            }
+        } finally {
+            System.clearProperty("valhalla.use.tile.extract")
+        }
+    }
+
+    @Test
+    fun `test buildConfig honours injected performance knobs`() {
+        System.setProperty("valhalla.use.tile.extract", "false")
+        try {
+            val tuned = RegionConfigFactory.buildConfig(
+                region = "new_york",
+                enableTraffic = false,
+                maxCacheSizeBytes = 268435456L,   // 256 MiB
+                readerConcurrency = 2,
+                minimumReachability = 20,
+                searchCutoff = 10000,
+                maxDistanceMeters = 200000.0,
+                meiliGridCacheSize = 25000        // map-matching memory bound
+            )
+            assertTrue(tuned.contains("\"max_cache_size\": 268435456"))
+            assertTrue(tuned.contains("\"concurrency\": 2"))
+            assertTrue(tuned.contains("\"minimum_reachability\": 20"))
+            assertTrue(tuned.contains("\"search_cutoff\": 10000"))
+            assertTrue(tuned.contains("\"max_distance\": 200000.0"))
+            assertTrue(tuned.contains("\"cache_size\": 25000"),
+                "map-matching grid cache must honour the injected value")
+            // Default grid cache must be gone when overridden.
+            assertFalse(tuned.contains("\"cache_size\": 100240"))
+            // Old expensive values must be gone when overridden.
+            assertFalse(tuned.contains("\"max_cache_size\": 1073741824"))
+            assertFalse(tuned.contains("\"search_cutoff\": 35000"))
+        } finally {
+            System.clearProperty("valhalla.use.tile.extract")
+        }
+    }
+
 }

@@ -21,6 +21,27 @@ object RegionConfigFactory {
     private const val DEFAULT_REGIONS_FILE = "config/regions/regions.json"
     private const val DEFAULT_TILE_DIR_ROOT = "data/valhalla_tiles"
 
+    // ── Historical defaults for the injectable performance knobs (Phase 2) ──
+    // These are the exact values that were previously hardcoded in the generated
+    // config. buildConfig() defaults to them so direct callers (e.g. Singapore
+    // prod) produce byte-for-byte identical config. ActorPool overrides them with
+    // cheaper, memory-bounded values for POOLED actors only.
+    // See tasks/todo-concurrency-scaling.md.
+    /** 1 GiB per-Actor graph tile cache (historical default). */
+    const val DEFAULT_MAX_CACHE_SIZE_BYTES: Long = 1073741824L
+    /** GraphReader read concurrency (historical default). */
+    const val DEFAULT_READER_CONCURRENCY: Int = 4
+    /** Loki reachability pre-check size (historical default). */
+    const val DEFAULT_MINIMUM_REACHABILITY: Int = 50
+    /** Loki candidate search cutoff in metres (historical default). */
+    const val DEFAULT_SEARCH_CUTOFF: Int = 35000
+    /** auto/taxi max route distance in metres (historical default: 5000 km). */
+    const val DEFAULT_MAX_DISTANCE_METERS: Double = 5000000.0
+    /** Meili map-matching grid cache size (historical default). Per-actor memory. */
+    const val DEFAULT_MEILI_GRID_CACHE_SIZE: Int = 100240
+    /** Meili map-matching grid cell size (historical default). */
+    const val DEFAULT_MEILI_GRID_SIZE: Int = 500
+
     // Cache for loaded regions config
     @Volatile
     private var cachedRegionsConfig: JSONObject? = null
@@ -106,7 +127,22 @@ object RegionConfigFactory {
         region: String,
         tileDir: String? = null,
         enableTraffic: Boolean = false,
-        regionsFile: String? = null
+        regionsFile: String? = null,
+        // ── Injectable performance knobs (Phase 2) ───────────────────────────
+        // All default to the historical hardcoded values, so direct callers
+        // (e.g. Singapore prod) get byte-for-byte identical config. ActorPool
+        // supplies cheaper, memory-bounded values to POOLED actors only.
+        // See tasks/todo-concurrency-scaling.md.
+        maxCacheSizeBytes: Long = DEFAULT_MAX_CACHE_SIZE_BYTES,
+        readerConcurrency: Int = DEFAULT_READER_CONCURRENCY,
+        minimumReachability: Int = DEFAULT_MINIMUM_REACHABILITY,
+        searchCutoff: Int = DEFAULT_SEARCH_CUTOFF,
+        maxDistanceMeters: Double = DEFAULT_MAX_DISTANCE_METERS,
+        // Map-matching (Meili) knobs. Lowering the grid cache bounds per-actor
+        // map-matching memory so pool growth doesn't multiply it. Defaults equal
+        // the historical values → no behaviour change for direct callers.
+        meiliGridCacheSize: Int = DEFAULT_MEILI_GRID_CACHE_SIZE,
+        meiliGridSize: Int = DEFAULT_MEILI_GRID_SIZE
     ): String {
         val resolvedRegionsFile = regionsFile ?: DEFAULT_REGIONS_FILE
         val normalizedRegion = normalizeRegionName(region)
@@ -162,7 +198,14 @@ object RegionConfigFactory {
             regionConfig = regionConfig,
             tileDir = absoluteTileDir,
             tileExtract = tileExtract,
-            enableTraffic = enableTraffic
+            enableTraffic = enableTraffic,
+            maxCacheSizeBytes = maxCacheSizeBytes,
+            readerConcurrency = readerConcurrency,
+            minimumReachability = minimumReachability,
+            searchCutoff = searchCutoff,
+            maxDistanceMeters = maxDistanceMeters,
+            meiliGridCacheSize = meiliGridCacheSize,
+            meiliGridSize = meiliGridSize
         )
     }
 
@@ -225,10 +268,23 @@ object RegionConfigFactory {
         regionConfig: JSONObject,
         tileDir: String,
         tileExtract: String? = null,
-        enableTraffic: Boolean
+        enableTraffic: Boolean,
+        maxCacheSizeBytes: Long = DEFAULT_MAX_CACHE_SIZE_BYTES,
+        readerConcurrency: Int = DEFAULT_READER_CONCURRENCY,
+        minimumReachability: Int = DEFAULT_MINIMUM_REACHABILITY,
+        searchCutoff: Int = DEFAULT_SEARCH_CUTOFF,
+        maxDistanceMeters: Double = DEFAULT_MAX_DISTANCE_METERS,
+        meiliGridCacheSize: Int = DEFAULT_MEILI_GRID_CACHE_SIZE,
+        meiliGridSize: Int = DEFAULT_MEILI_GRID_SIZE
     ): String {
         // Get costing options if present
         val costingOptions = regionConfig.optJSONObject("costing_options")
+
+        // Performance knobs are injected (Phase 2). Defaults equal the historical
+        // hardcoded values, so callers that don't pass them get identical config.
+        // The previous region-specific (nyc_tri_state) auto-override was removed in
+        // favour of these explicit params — tuning is now a property the caller (or
+        // ActorPool) chooses, not the region name. See tasks/todo-concurrency-scaling.md.
 
         // Traffic paths are derived from tile_dir: {tile_dir}/../
         // incident_dir must match the path LtaFetchJob writes to: {base}/incidents/
@@ -252,8 +308,8 @@ object RegionConfigFactory {
         {
           "mjolnir": {
             "tile_dir": "$tileDir",
-            $tileExtractBlock${trafficBlock}"max_cache_size": 1073741824,
-            "concurrency": 4
+            $tileExtractBlock${trafficBlock}"max_cache_size": $maxCacheSizeBytes,
+            "concurrency": $readerConcurrency
           },
           "loki": {
             "actions": [
@@ -267,9 +323,9 @@ object RegionConfigFactory {
               "status"
             ],
             "service_defaults": {
-              "minimum_reachability": 50,
+              "minimum_reachability": $minimumReachability,
               "radius": 0,
-              "search_cutoff": 35000,
+              "search_cutoff": $searchCutoff,
               "node_snap_tolerance": 5,
               "street_side_tolerance": 5,
               "street_side_max_distance": 1000,
@@ -317,19 +373,19 @@ object RegionConfigFactory {
               "search_radius": 25
             },
             "grid": {
-              "size": 500,
-              "cache_size": 100240
+              "size": $meiliGridSize,
+              "cache_size": $meiliGridCacheSize
             }
           },
           "service_limits": {
             "auto": {
-              "max_distance": 5000000.0,
+              "max_distance": $maxDistanceMeters,
               "max_locations": 20,
               "max_matrix_distance": 400000.0,
               "max_matrix_location_pairs": 5000
             },
             "taxi": {
-              "max_distance": 5000000.0,
+              "max_distance": $maxDistanceMeters,
               "max_locations": 20,
               "max_matrix_distance": 400000.0,
               "max_matrix_location_pairs": 5000
