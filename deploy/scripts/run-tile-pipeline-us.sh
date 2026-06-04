@@ -16,8 +16,6 @@
 # every reader on that EFS — there is no separate copy-to-EFS step. S3 (Phase 5)
 # is an archive. This mirrors the Singapore pipeline exactly.
 #
-#   → swap latest → cleanup → (geometry mapping) → EFS tile sync
-#
 # REGION RESOLUTION (region-agnostic — driven entirely by regions.json):
 # The single <region> argument is a key under .regions in regions.json. Its
 # on-disk tile layout (the "subdir") is resolved automatically:
@@ -230,11 +228,6 @@ bootstrap() {
 
     # Apply config-file values as defaults (CLI flags already set take precedence)
     VALHALLA_TILE_DIR="${VALHALLA_TILE_DIR:-${PROJECT_ROOT}/data/valhalla_tiles}"
-    # EFS runtime volume the tada-traffic-data-builder cron mmaps. Defaults to the
-    # tile dir so the build-on-EFS model is a safe no-op (Phase 6.5 short-circuits);
-    # set a distinct path in pipeline.*-us.conf to mirror build output onto a
-    # separate EFS mount.
-    VALHALLA_EFS_DIR="${VALHALLA_EFS_DIR:-${VALHALLA_TILE_DIR}}"
     OSM_DIR="${OSM_DIR:-${PROJECT_ROOT}/data/osm}"
     VALHALLA_ADMIN_DIR="${VALHALLA_ADMIN_DIR:-${PROJECT_ROOT}/data/admin_data}"
     VALHALLA_LOG_DIR="${VALHALLA_LOG_DIR:-${PROJECT_ROOT}/logs}"
@@ -301,7 +294,6 @@ bootstrap() {
 
     log_info "OSM file:       ${OSM_FILE}"
     log_info "Tile base dir:  ${VALHALLA_TILE_DIR}/${TILE_SUBDIR}"
-    log_info "EFS dir:        ${VALHALLA_EFS_DIR}"
     log_info "This version:   v${VERSION_TAG}"
     log_info "Keep versions:  ${KEEP_VERSIONS}"
     log_info "S3 region:      ${S3_REGION}"
@@ -942,128 +934,6 @@ geometry_mapping() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 6.5: EFS Tile Sync
-# ---------------------------------------------------------------------------
-# Mirrors the just-built tiles to EFS so the tada-traffic-data-builder cron
-# (running in a separate pod) can mmap the .gph files at
-# ${VALHALLA_EFS_DIR}/${TILE_SUBDIR}/latest. Without this, that cron's call to
-# read_directed_edge_count silently hits FileNotFoundError, returns 0 for every
-# tile, and emits a syntactically-valid but empty traffic.tar (32-byte headers,
-# no per-edge entries).
-#
-# US note: keyed on TILE_SUBDIR (the group tile_dir, e.g. nyc_tri_state) — NOT
-# REGION — so NY/NJ/CT share one EFS tile set, consistent with phase_s3_sync and
-# phase_cleanup. EFS is an independent sink from S3 (Phase 5): both copy the same
-# VERSIONED_TILE_DIR build output; there is no S3->EFS download.
-#
-# Runs AFTER geometry_mapping so the EFS swap only happens once tiles and any
-# matching mapping are ready — readers see the old {tiles, mapping} pair
-# consistently until the symlink flips.
-#
-# Skipped when VALHALLA_EFS_DIR is absent (local dev). When VALHALLA_EFS_DIR
-# resolves to the same physical dir tiles were built in (build-on-EFS model,
-# the currently-committed pipeline.*-us.conf), the copy is short-circuited and
-# only the symlink/prune are ensured — phase_swap_latest already published.
-# ---------------------------------------------------------------------------
-phase_efs_sync() {
-    set_phase "Phase 6.5: EFS Tile Sync"
-
-    local efs_dir="${VALHALLA_EFS_DIR:-${VALHALLA_TILE_DIR}}"
-
-    if [[ ! -d "${efs_dir}" ]]; then
-        log_info "EFS dir not present at ${efs_dir} — skipping EFS sync (local dev)"
-        return 0
-    fi
-
-    local efs_subdir_dir="${efs_dir}/${TILE_SUBDIR}"
-    local efs_versioned_dir="${efs_subdir_dir}/v${VERSION_TAG}"
-    local efs_latest_link="${efs_subdir_dir}/latest"
-    local efs_partial_dir="${efs_versioned_dir}.partial"
-
-    if [[ "${DRY_RUN}" == true ]]; then
-        if [[ "$(realpath -m "${efs_versioned_dir}")" == "$(realpath -m "${VERSIONED_TILE_DIR}")" ]]; then
-            log_dry "Build dir is the EFS dir — would skip copy; ensure symlink only"
-        else
-            log_dry "Would copy: ${VERSIONED_TILE_DIR} → ${efs_versioned_dir}"
-        fi
-        log_dry "Would update: ${efs_latest_link} → v${VERSION_TAG}"
-        return 0
-    fi
-
-    mkdir -p "${efs_subdir_dir}"
-
-    # Build-on-EFS short-circuit: if the EFS target resolves to the dir tiles
-    # were already built in, copying would be a dir-onto-itself. Skip the copy;
-    # phase_swap_latest already created the symlink. Still re-assert it + prune
-    # below (idempotent) so this phase owns the EFS contract uniformly.
-    if [[ "$(realpath -m "${efs_versioned_dir}")" == "$(realpath -m "${VERSIONED_TILE_DIR}")" ]]; then
-        log_info "Build dir is the EFS dir — tiles already on EFS; ensuring symlink only"
-    else
-        log_info "Copying tiles to EFS: ${efs_versioned_dir}"
-        local start_epoch
-        start_epoch="$(date +%s)"
-
-        # Copy to .partial first; rename on success. Prevents a partial copy
-        # from being observable via the latest symlink if cp dies mid-run.
-        rm -rf "${efs_partial_dir}"
-        if ! cp -r "${VERSIONED_TILE_DIR}" "${efs_partial_dir}"; then
-            log_error "EFS copy failed: ${VERSIONED_TILE_DIR} → ${efs_partial_dir}"
-            rm -rf "${efs_partial_dir}"
-            return 5
-        fi
-        mv -T "${efs_partial_dir}" "${efs_versioned_dir}"
-
-        local elapsed=$(( $(date +%s) - start_epoch ))
-        local size
-        size="$(du -sh "${efs_versioned_dir}" | cut -f1)"
-        log_ok "EFS copy complete: ${size} in ${elapsed}s"
-    fi
-
-    # Atomic symlink swap. Readers see either the old version or the new, never
-    # a half-state. Two preconditions ln -sfn alone doesn't handle:
-    #
-    # 1. If ${efs_latest_link} pre-exists as a real DIRECTORY (e.g. created by
-    #    region bootstrap before this script ever ran), `ln -sfn target dir`
-    #    does NOT replace it — it silently creates `dir/target` inside,
-    #    producing a useless self-referencing symlink. We must rmdir the
-    #    (presumed-empty) placeholder first.
-    # 2. If it pre-exists as a symlink to the same target, ln -sfn is a no-op;
-    #    harmless.
-    if [[ -d "${efs_latest_link}" && ! -L "${efs_latest_link}" ]]; then
-        if [[ -n "$(ls -A "${efs_latest_link}" 2>/dev/null)" ]]; then
-            log_error "EFS latest exists as a non-empty directory: ${efs_latest_link}. Manual cleanup required."
-            return 5
-        fi
-        log_info "Removing pre-existing empty directory at ${efs_latest_link} (bootstrap placeholder)"
-        rmdir "${efs_latest_link}"
-    fi
-
-    ln -sfn "v${VERSION_TAG}" "${efs_latest_link}"
-    log_ok "EFS latest symlink updated: ${efs_latest_link} → v${VERSION_TAG}"
-
-    # Prune old EFS versions — keep last N. Same retention as local cleanup.
-    local versions
-    mapfile -t versions < <(
-        find "${efs_subdir_dir}" -maxdepth 1 -type d -name "v[0-9]*" \
-        | sort
-    )
-
-    local total=${#versions[@]}
-    local to_remove=$(( total - KEEP_VERSIONS ))
-
-    if [[ ${to_remove} -gt 0 ]]; then
-        log_info "EFS versions: ${total} (keeping ${KEEP_VERSIONS}); removing ${to_remove} oldest"
-        for (( i=0; i<to_remove; i++ )); do
-            local old="${versions[$i]}"
-            log_info "Removing old EFS version: $(basename "${old}")"
-            rm -rf "${old}"
-        done
-    else
-        log_info "EFS versions: ${total} (keeping ${KEEP_VERSIONS}) — nothing to prune"
-    fi
-}
-
-# ---------------------------------------------------------------------------
 # Phase 7: Cleanup old versions
 # ---------------------------------------------------------------------------
 phase_cleanup() {
@@ -1184,8 +1054,6 @@ main() {
     IS_GROUP=false
     TILE_GROUP=""
     TILE_SUBDIR=""
-    # EFS sink dir; resolved in bootstrap (default = VALHALLA_TILE_DIR).
-    VALHALLA_EFS_DIR="${VALHALLA_EFS_DIR:-}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1227,9 +1095,6 @@ main() {
     phase_swap_latest
     phase_cleanup
     geometry_mapping
-    # AFTER geometry_mapping (matches the SG reference ordering): the EFS swap
-    # only flips once tiles and any matching mapping are ready.
-    phase_efs_sync
 
     log_ok "US pipeline completed successfully — v${VERSION_TAG}"
     exit ${PIPELINE_EXIT_CODE}
