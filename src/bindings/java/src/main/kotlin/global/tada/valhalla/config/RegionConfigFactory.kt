@@ -342,7 +342,25 @@ object RegionConfigFactory {
             "max_reserved_labels_count_astar": 1000000,
             "max_reserved_labels_count_bidir_astar": 500000,
             "max_reserved_labels_count_dijkstras": 2000000,
-            "max_reserved_labels_count_bidir_dijkstras": 1000000
+            "max_reserved_labels_count_bidir_dijkstras": 1000000,
+            "bidirectional_astar": {
+              "hierarchy_limits": {
+                "max_up_transitions": { "0": 0, "1": 400, "2": 100 },
+                "expand_within_distance": { "0": 3.4028235e38, "1": 20000.0, "2": 5000.0 }
+              }
+            },
+            "unidirectional_astar": {
+              "hierarchy_limits": {
+                "max_up_transitions": { "0": 0, "1": 400, "2": 100 },
+                "expand_within_distance": { "0": 3.4028235e38, "1": 100000.0, "2": 5000.0 }
+              }
+            },
+            "costmatrix": {
+              "hierarchy_limits": {
+                "max_up_transitions": { "0": 0, "1": 400, "2": 100 },
+                "expand_within_distance": { "0": 3.4028235e38, "1": 100000.0, "2": 5000.0 }
+              }
+            }
           },
           "meili": {
             "mode": "auto",
@@ -437,7 +455,20 @@ object RegionConfigFactory {
             "max_timedep_distance": 500000,
             "max_alternates": 2,
             "max_exclude_polygons_length": 10000,
-            "status": {}
+            "status": {},
+            "hierarchy_limits": {
+              "bidirectional_astar": {
+                "max_allowed_up_transitions": { "0": 0, "1": 400, "2": 100 },
+                "max_expand_within_distance": { "0": 3.4028235e38, "1": 20000.0, "2": 5000.0 }
+              },
+              "unidirectional_astar": {
+                "max_allowed_up_transitions": { "0": 0, "1": 400, "2": 100 },
+                "max_expand_within_distance": { "0": 3.4028235e38, "1": 100000.0, "2": 5000.0 }
+              },
+              "costmatrix": {
+                "max_allowed_up_transitions": { "0": 0, "1": 400, "2": 100 }
+              }
+            }
           }
         }
         """.trimIndent()

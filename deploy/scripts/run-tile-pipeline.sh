@@ -767,6 +767,87 @@ phase_validate() {
 }
 
 # ---------------------------------------------------------------------------
+# Phase 4.5: Tar Extract — pack tiles into tiles.tar for mmap (tile_extract)
+# ---------------------------------------------------------------------------
+# Creates tiles.tar alongside the existing 0/,1/,2/ directories so Valhalla
+# can load tiles via MAP_SHARED mmap. With tile_extract configured alongside
+# tile_dir, the OS shares physical pages across all Actor pool instances —
+# pool memory cost becomes ~1× tile data instead of N× (one per Actor).
+# tile_dir remains in the config as a fallback if the tar is absent.
+# ---------------------------------------------------------------------------
+phase_tar_extract() {
+    set_phase "Phase 4.5: Tar Extract"
+
+    local tar_path="${VERSIONED_TILE_DIR}/tiles.tar"
+
+    if [[ "${DRY_RUN}" == true ]]; then
+        log_dry "Would build tar extract: ${tar_path}"
+        return 0
+    fi
+
+    # In --skip-build mode VERSIONED_TILE_DIR points to the live 'latest' directory.
+    # Overwriting tiles.tar there would truncate a file that running Valhalla actors
+    # may have mmap'd (MAP_SHARED). Skip if the tar already exists; delete it first
+    # if you explicitly want to rebuild.
+    if [[ "${SKIP_BUILD}" == true ]] && [[ -s "${tar_path}" ]]; then
+        log_info "Skipping tar extract (--skip-build, tiles.tar already exists at ${tar_path})"
+        return 0
+    fi
+
+    # Prefer valhalla_build_extract — writes index.bin as the first member so
+    # Valhalla uses the fast indexed load path at startup. Without index.bin
+    # Valhalla falls back to a full tar scan (still works, but slower and
+    # prints a startup WARN).
+    local extract_config="${VALHALLA_LOG_DIR}/valhalla-extract-${REGION}-${RUN_ID}.json"
+    local extract_log="${VALHALLA_LOG_DIR}/valhalla-extract-${REGION}-${RUN_ID}.log"
+    jq -n \
+        --arg td "${VERSIONED_TILE_DIR}" \
+        --arg te "${tar_path}" \
+        '{"mjolnir":{"tile_dir":$td,"tile_extract":$te}}' > "${extract_config}"
+
+    if [[ "${USE_DOCKER}" == true ]]; then
+        # Docker path — valhalla_build_extract is always available in the image.
+        # Cannot use _run_docker_command here because it unconditionally appends
+        # the OSM .pbf positional which valhalla_build_extract does not accept.
+        log_info "Building tile extract with index (Docker: valhalla_build_extract)..."
+        local config_dir
+        config_dir="$(dirname "${extract_config}")"
+        local docker_config="${config_dir}/valhalla-docker-extract-${RUN_ID}.json"
+        sed \
+            -e "s|${VERSIONED_TILE_DIR}|/valhalla/tiles|g" \
+            "${extract_config}" > "${docker_config}"
+        docker run --rm \
+            -v "${VERSIONED_TILE_DIR}:/valhalla/tiles" \
+            -v "${config_dir}:/valhalla/config" \
+            "${VALHALLA_DOCKER_IMAGE}" \
+            valhalla_build_extract \
+            -c "/valhalla/config/$(basename "${docker_config}")" \
+            --overwrite \
+            2>&1 | tee -a "${extract_log}" | _log_stream "valhalla_build_extract"
+        rm -f "${docker_config}"
+    elif command -v valhalla_build_extract &>/dev/null || [[ -x "${VALHALLA_BUILD_TILES_BIN%tiles}extract" ]]; then
+        local extract_bin
+        extract_bin="$(command -v valhalla_build_extract 2>/dev/null || echo "${VALHALLA_BUILD_TILES_BIN%tiles}extract")"
+        log_info "Building tile extract with index (${extract_bin})..."
+        "${extract_bin}" -c "${extract_config}" --overwrite 2>&1 | tee -a "${extract_log}"
+    else
+        # Fallback: plain tar — functional but no index.bin; Valhalla will WARN
+        # at startup about degraded performance for tile loading.
+        log_warn "valhalla_build_extract not found — falling back to plain tar (no index.bin)"
+        ( cd "${VERSIONED_TILE_DIR}" && tar cf tiles.tar 0 1 2 ) \
+            2>&1 | tee -a "${VALHALLA_LOG_DIR}/tar-extract-${REGION}-${RUN_ID}.log"
+    fi
+    rm -f "${extract_config}"
+
+    if [[ ! -s "${tar_path}" ]]; then
+        log_error "tiles.tar was not produced at ${tar_path}"
+        exit 4
+    fi
+
+    log_ok "Tile extract ready: ${tar_path} ($(du -sh "${tar_path}" | cut -f1))"
+}
+
+# ---------------------------------------------------------------------------
 # Phase 5: S3 Sync (non-local environments only)
 # ---------------------------------------------------------------------------
 phase_s3_sync() {
@@ -884,18 +965,24 @@ geometry_mapping() {
     log_info "Using JAR: ${jar}"
     log_info "Tile dir:  $(readlink -f "${LATEST_LINK}")"
 
-    # Write geometry mapping outputs as siblings of the versioned tile dirs so
-    # the Python traffic cron can read them off the shared EFS volume. Without
-    # these overrides the job falls back to the relative `data/...` default and
-    # the file lands inside the container's filesystem, gone after the pod exits.
-    local cache_dir="${VALHALLA_TILE_DIR}/${REGION}/cache"
-    mkdir -p "${cache_dir}"
+    # Snapshots are READ from EFS (written by the tada-traffic-data-builder cron),
+    # and cache outputs are WRITTEN to EFS (consumed by the same cron on its next
+    # tick). EFS lives at /mnt/efs/valhalla_tiles per the K8s volumeMount on both
+    # pods. ${VALHALLA_TILE_DIR} in this pod is /var/valhalla/tiles (local) —
+    # used only by the C++ engine to read the freshly-built tiles — do NOT
+    # conflate it with the EFS path. VALHALLA_EFS_DIR is overridable for local
+    # dev where EFS doesn't exist.
+    local efs_region_dir="${VALHALLA_EFS_DIR:-/mnt/efs/valhalla_tiles}/${REGION}"
+    local efs_cache_dir="${efs_region_dir}/cache"
+    local efs_snapshots_dir="${efs_region_dir}/snapshots/speed_bands"
+    mkdir -p "${efs_cache_dir}"
 
     local job_exit_code=0
     VALHALLA_TILE_DIR="${LATEST_LINK}" \
-    GEOMETRY_MAPPING_CACHE_PATH="${cache_dir}/geometry_mapping.json" \
-    GEOMETRY_MAPPING_REPORT_PATH="${cache_dir}/geometry_mapping_report.txt" \
-    GEOMETRY_MAPPING_JSON_REPORT_PATH="${cache_dir}/geometry_mapping_report.json" \
+    VALHALLA_SNAPSHOTS_DIR="${efs_snapshots_dir}" \
+    GEOMETRY_MAPPING_CACHE_PATH="${efs_cache_dir}/geometry_mapping.json" \
+    GEOMETRY_MAPPING_REPORT_PATH="${efs_cache_dir}/geometry_mapping_report.txt" \
+    GEOMETRY_MAPPING_JSON_REPORT_PATH="${efs_cache_dir}/geometry_mapping_report.json" \
         java -cp "${jar}:/app/lib/*" global.tada.valhalla.traffic.sg.GeometryMappingJob \
         || job_exit_code=$?
 
@@ -906,6 +993,104 @@ geometry_mapping() {
     esac
 
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# Phase 6.5: EFS Tile Sync
+# ---------------------------------------------------------------------------
+# Mirrors the just-built tiles to EFS so the tada-traffic-data-builder cron
+# (running in a separate pod) can mmap the .gph files at
+# ${VALHALLA_EFS_DIR}/${REGION}/latest. Without this, that cron's call to
+# read_directed_edge_count silently hits FileNotFoundError, returns 0 for
+# every tile, and the cron emits a syntactically-valid but empty traffic.tar
+# (32-byte headers, no per-edge entries).
+#
+# Runs AFTER geometry_mapping so the EFS swap only happens when both the
+# tiles and the matching mapping.json are ready — readers see the old
+# {tiles, mapping} pair consistently until the symlink flips.
+#
+# Skipped when VALHALLA_EFS_DIR is unset/absent — local dev path.
+# ---------------------------------------------------------------------------
+phase_efs_sync() {
+    set_phase "Phase 6.5: EFS Tile Sync"
+
+    local efs_dir="${VALHALLA_EFS_DIR:-/mnt/efs/valhalla_tiles}"
+    if [[ ! -d "${efs_dir}" ]]; then
+        log_info "EFS dir not present at ${efs_dir} — skipping EFS sync (local dev)"
+        return 0
+    fi
+
+    if [[ "${DRY_RUN}" == true ]]; then
+        log_dry "Would copy: ${VERSIONED_TILE_DIR} → ${efs_dir}/${REGION}/v${VERSION_TAG}"
+        log_dry "Would update: ${efs_dir}/${REGION}/latest → v${VERSION_TAG}"
+        return 0
+    fi
+
+    local efs_region_dir="${efs_dir}/${REGION}"
+    local efs_versioned_dir="${efs_region_dir}/v${VERSION_TAG}"
+    local efs_latest_link="${efs_region_dir}/latest"
+    local efs_partial_dir="${efs_versioned_dir}.partial"
+
+    mkdir -p "${efs_region_dir}"
+
+    log_info "Copying tiles to EFS: ${efs_versioned_dir}"
+    local start_epoch
+    start_epoch="$(date +%s)"
+
+    # Copy to .partial first; rename on success. Prevents a partial copy
+    # from being observable via the latest symlink if cp dies mid-run.
+    rm -rf "${efs_partial_dir}"
+    if ! cp -r "${VERSIONED_TILE_DIR}" "${efs_partial_dir}"; then
+        log_error "EFS copy failed: ${VERSIONED_TILE_DIR} → ${efs_partial_dir}"
+        rm -rf "${efs_partial_dir}"
+        return 5
+    fi
+    mv -T "${efs_partial_dir}" "${efs_versioned_dir}"
+
+    local elapsed=$(( $(date +%s) - start_epoch ))
+    local size
+    size="$(du -sh "${efs_versioned_dir}" | cut -f1)"
+    log_ok "EFS copy complete: ${size} in ${elapsed}s"
+
+    # Atomic symlink swap. Readers see either the old version or the new,
+    # never a half-state. Two preconditions ln -sfn alone doesn't handle:
+    #
+    # 1. If ${efs_latest_link} pre-exists as a real DIRECTORY (e.g. created
+    #    by region bootstrap before this script ever ran), `ln -sfn target
+    #    dir` does NOT replace it — it silently creates `dir/target` inside,
+    #    producing a useless self-referencing symlink. We must rmdir the
+    #    (presumed-empty) placeholder first.
+    # 2. If it pre-exists as a symlink to the same target, ln -sfn is a
+    #    no-op; harmless.
+    if [[ -d "${efs_latest_link}" && ! -L "${efs_latest_link}" ]]; then
+        if [[ -n "$(ls -A "${efs_latest_link}" 2>/dev/null)" ]]; then
+            log_error "EFS latest exists as a non-empty directory: ${efs_latest_link}. Manual cleanup required."
+            return 5
+        fi
+        log_info "Removing pre-existing empty directory at ${efs_latest_link} (bootstrap placeholder)"
+        rmdir "${efs_latest_link}"
+    fi
+    ln -sfn "v${VERSION_TAG}" "${efs_latest_link}"
+    log_ok "EFS latest symlink updated: ${efs_latest_link} → v${VERSION_TAG}"
+
+    # Prune old EFS versions — keep last N. Same retention as local cleanup.
+    local versions
+    mapfile -t versions < <(
+        find "${efs_region_dir}" -maxdepth 1 -type d -name "v[0-9]*" \
+        | sort
+    )
+    local total=${#versions[@]}
+    local to_remove=$(( total - KEEP_VERSIONS ))
+    if [[ ${to_remove} -gt 0 ]]; then
+        log_info "EFS versions: ${total} (keeping ${KEEP_VERSIONS}); removing ${to_remove} oldest"
+        for (( i=0; i<to_remove; i++ )); do
+            local old="${versions[$i]}"
+            log_info "Removing old EFS version: $(basename "${old}")"
+            rm -rf "${old}"
+        done
+    else
+        log_info "EFS versions: ${total} (keeping ${KEEP_VERSIONS}) — nothing to prune"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1058,10 +1243,12 @@ main() {
     fi
     phase_extract
     phase_validate
+    phase_tar_extract
     phase_s3_sync
     phase_swap_latest
     phase_cleanup
     geometry_mapping
+    phase_efs_sync
 
     log_ok "Pipeline completed successfully — v${VERSION_TAG}"
     exit ${PIPELINE_EXIT_CODE}

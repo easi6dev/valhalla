@@ -31,7 +31,7 @@ import java.util.concurrent.CompletableFuture
  * val result = actor.route("""{"locations": [...]}""")
  * ```
  */
-class Actor(config: String) : AutoCloseable {
+class Actor(config: String, private val sharedReaderHandle: Long = 0L) : AutoCloseable {
 
     enum class OperatingSystem(val identifier: String, val suffix: String, val isPosix: Boolean = true) {
         WINDOWS("win", ".dll", isPosix = false), // only supports amd64
@@ -356,6 +356,32 @@ class Actor(config: String) : AutoCloseable {
             val config = File(configFile).readText()
             return Actor(config)
         }
+
+        /**
+         * Creates a shared [GraphReader] backed by a [SynchronizedTileCache] so it can be
+         * used concurrently by multiple [Actor] instances.
+         *
+         * Lifecycle: the caller owns the handle and must call [destroySharedReader] after all
+         * [Actor] instances created with this handle have been [closed][Actor.close].
+         *
+         * @param config Valhalla configuration JSON (same string passed to [Actor])
+         * @return opaque handle to the native GraphReader; pass to [Actor] constructor
+         */
+        @JvmStatic
+        fun createSharedReader(config: String): Long = nativeCreateReader(config)
+
+        /**
+         * Destroys a shared [GraphReader] handle returned by [createSharedReader].
+         * Must only be called after every [Actor] that uses this handle has been closed.
+         */
+        @JvmStatic
+        fun destroySharedReader(handle: Long) = nativeDestroyReader(handle)
+
+        @JvmStatic
+        private external fun nativeCreateReader(config: String): Long
+
+        @JvmStatic
+        private external fun nativeDestroyReader(handle: Long)
     }
 
     /**
@@ -372,7 +398,11 @@ class Actor(config: String) : AutoCloseable {
 
     init {
         validateTileDirectory(config)
-        nativeHandle = nativeCreate(config)
+        nativeHandle = if (sharedReaderHandle == 0L) {
+            nativeCreate(config)
+        } else {
+            nativeCreateWithSharedReader(config, sharedReaderHandle)
+        }
         if (nativeHandle == 0L) {
             throw ValhallaException("Failed to create native actor")
         }
@@ -422,6 +452,8 @@ class Actor(config: String) : AutoCloseable {
      * @return Native object pointer
      */
     private external fun nativeCreate(config: String): Long
+
+    private external fun nativeCreateWithSharedReader(config: String, readerHandle: Long): Long
 
     /**
      * Destroys the native actor object.
