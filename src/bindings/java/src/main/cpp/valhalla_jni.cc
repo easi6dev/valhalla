@@ -1,3 +1,4 @@
+#include "baldr/graphreader.h"
 #include "baldr/rapidjson_utils.h"
 #include "config.h"
 #include "midgard/logging.h"
@@ -7,6 +8,8 @@
 #include <boost/property_tree/ptree.hpp>
 #include <jni.h>
 
+#include <chrono>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -171,6 +174,34 @@ vt::actor_t* handle_to_actor(jlong handle) {
   return reinterpret_cast<vt::actor_t*>(handle);
 }
 
+/**
+ * Builds a deadline-based interrupt functor for an action.
+ *
+ * Valhalla calls the interrupt periodically during loki/thor/meili work; when it
+ * throws, the action aborts and the actor is freed for the next request. We use
+ * this to enforce a per-request wall-clock budget from Java: a runaway or
+ * pathological request can't pin a pooled actor indefinitely.
+ *
+ * @param timeout_ms budget in milliseconds; <= 0 means "no deadline" (nullptr)
+ * @return a shared_ptr to the functor (kept alive for the duration of the call),
+ *         or nullptr when no deadline is requested
+ */
+std::shared_ptr<std::function<void()>> make_deadline_interrupt(jlong timeout_ms) {
+  if (timeout_ms <= 0) {
+    return nullptr;
+  }
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  return std::make_shared<std::function<void()>>([deadline, timeout_ms]() {
+    if (std::chrono::steady_clock::now() > deadline) {
+      // Plain std::runtime_error → mapped to ValhallaException by the JNI catch
+      // blocks below (no numeric code needed, unlike valhalla_exception_t).
+      throw std::runtime_error(
+          "Request exceeded the per-request timeout of " + std::to_string(timeout_ms) + "ms");
+    }
+  });
+}
+
 } // namespace
 
 extern "C" {
@@ -220,6 +251,80 @@ JNIEXPORT void JNICALL Java_global_tada_valhalla_Actor_nativeDestroy(JNIEnv* /* 
 }
 
 /**
+ * Creates a shared GraphReader with SynchronizedTileCache so it can be safely
+ * used by multiple Actor instances concurrently.
+ *
+ * Class:     global_tada_valhalla_Actor
+ * Method:    nativeCreateReader
+ * Signature: (Ljava/lang/String;)J
+ */
+JNIEXPORT jlong JNICALL Java_global_tada_valhalla_Actor_nativeCreateReader(JNIEnv* env,
+                                                                             jclass /* cls */,
+                                                                             jstring config_str) {
+  try {
+    std::string config = jstring_to_string(env, config_str);
+    auto pt = configure(config);
+    // Force SynchronizedTileCache so the reader is safe for concurrent Actor access.
+    pt.put("mjolnir.global_synchronized_cache", true);
+    auto* reader = new valhalla::baldr::GraphReader(pt.get_child("mjolnir"));
+    return reinterpret_cast<jlong>(reader);
+  } catch (const std::exception& e) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException", e.what());
+    return 0;
+  } catch (...) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException",
+                       "Unknown error creating shared reader");
+    return 0;
+  }
+}
+
+/**
+ * Creates a new Actor that shares an existing GraphReader.
+ * The reader is NOT owned by this Actor — the caller must destroy it separately
+ * via nativeDestroyReader after all Actors using it have been destroyed.
+ *
+ * Class:     global_tada_valhalla_Actor
+ * Method:    nativeCreateWithSharedReader
+ * Signature: (Ljava/lang/String;J)J
+ */
+JNIEXPORT jlong JNICALL Java_global_tada_valhalla_Actor_nativeCreateWithSharedReader(
+    JNIEnv* env,
+    jobject /* obj */,
+    jstring config_str,
+    jlong reader_handle) {
+  try {
+    std::string config = jstring_to_string(env, config_str);
+    auto pt = configure(config);
+    auto& reader = *reinterpret_cast<valhalla::baldr::GraphReader*>(reader_handle);
+    vt::actor_t* actor = new vt::actor_t(pt, reader, true);
+    return actor_to_handle(actor);
+  } catch (const std::exception& e) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException", e.what());
+    return 0;
+  } catch (...) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException",
+                       "Unknown error creating actor with shared reader");
+    return 0;
+  }
+}
+
+/**
+ * Destroys a shared GraphReader created by nativeCreateReader.
+ * Must only be called after all Actors that use this reader have been destroyed.
+ *
+ * Class:     global_tada_valhalla_Actor
+ * Method:    nativeDestroyReader
+ * Signature: (J)V
+ */
+JNIEXPORT void JNICALL Java_global_tada_valhalla_Actor_nativeDestroyReader(JNIEnv* /* env */,
+                                                                             jclass /* cls */,
+                                                                             jlong reader_handle) {
+  if (reader_handle != 0) {
+    delete reinterpret_cast<valhalla::baldr::GraphReader*>(reader_handle);
+  }
+}
+
+/**
  * Calculates a route.
  *
  * Class:     global_tada_valhalla_Actor
@@ -246,6 +351,38 @@ JNIEXPORT jstring JNICALL Java_global_tada_valhalla_Actor_nativeRoute(JNIEnv* en
     std::string request = jstring_to_string(env, request_str);
     std::string result = actor->route(request);
 
+    return string_to_jstring(env, result);
+  } catch (const std::exception& e) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException", e.what());
+    return nullptr;
+  } catch (...) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException", "Unknown error in route");
+    return nullptr;
+  }
+}
+
+/**
+ * Calculates a route with a per-request wall-clock deadline (timeout_ms).
+ * timeout_ms <= 0 behaves exactly like nativeRoute (no deadline).
+ *
+ * Class:     global_tada_valhalla_Actor
+ * Method:    nativeRouteWithTimeout
+ * Signature: (JLjava/lang/String;J)Ljava/lang/String;
+ */
+JNIEXPORT jstring JNICALL Java_global_tada_valhalla_Actor_nativeRouteWithTimeout(
+    JNIEnv* env, jobject /* obj */, jlong handle, jstring request_str, jlong timeout_ms) {
+  if (env->EnsureLocalCapacity(5) != 0) {
+    return nullptr;
+  }
+  try {
+    vt::actor_t* actor = handle_to_actor(handle);
+    if (actor == nullptr) {
+      throwJavaException(env, "global/tada/valhalla/ValhallaException", "Invalid actor handle");
+      return nullptr;
+    }
+    std::string request = jstring_to_string(env, request_str);
+    auto interrupt = make_deadline_interrupt(timeout_ms);
+    std::string result = actor->route(request, interrupt.get());
     return string_to_jstring(env, result);
   } catch (const std::exception& e) {
     throwJavaException(env, "global/tada/valhalla/ValhallaException", e.what());
@@ -448,6 +585,50 @@ Java_global_tada_valhalla_Actor_nativeTraceAttributes(JNIEnv* env,
     return nullptr;
   }
 }
+
+// ── Per-request-timeout variants for the long-running actions ────────────────
+// Each mirrors its non-timeout sibling but passes a deadline interrupt so a
+// runaway request aborts at timeout_ms and frees the actor. timeout_ms <= 0
+// means no deadline (identical to the non-timeout method). Generated via a macro
+// to keep the bodies identical and reviewable; only the actor method differs.
+#define VALHALLA_JNI_WITH_TIMEOUT(JNI_NAME, ACTOR_METHOD, ACTION_LABEL)                            \
+  JNIEXPORT jstring JNICALL JNI_NAME(JNIEnv* env, jobject, jlong handle, jstring request_str,     \
+                                     jlong timeout_ms) {                                           \
+    if (env->EnsureLocalCapacity(5) != 0) {                                                       \
+      return nullptr;                                                                              \
+    }                                                                                              \
+    try {                                                                                          \
+      vt::actor_t* actor = handle_to_actor(handle);                                                \
+      if (actor == nullptr) {                                                                      \
+        throwJavaException(env, "global/tada/valhalla/ValhallaException", "Invalid actor handle"); \
+        return nullptr;                                                                            \
+      }                                                                                            \
+      std::string request = jstring_to_string(env, request_str);                                  \
+      auto interrupt = make_deadline_interrupt(timeout_ms);                                        \
+      std::string result = actor->ACTOR_METHOD(request, interrupt.get());                          \
+      return string_to_jstring(env, result);                                                       \
+    } catch (const std::exception& e) {                                                            \
+      throwJavaException(env, "global/tada/valhalla/ValhallaException", e.what());                  \
+      return nullptr;                                                                              \
+    } catch (...) {                                                                                 \
+      throwJavaException(env, "global/tada/valhalla/ValhallaException",                             \
+                         "Unknown error in " ACTION_LABEL);                                         \
+      return nullptr;                                                                              \
+    }                                                                                              \
+  }
+
+VALHALLA_JNI_WITH_TIMEOUT(Java_global_tada_valhalla_Actor_nativeMatrixWithTimeout,
+                          matrix, "matrix")
+VALHALLA_JNI_WITH_TIMEOUT(Java_global_tada_valhalla_Actor_nativeOptimizedRouteWithTimeout,
+                          optimized_route, "optimized_route")
+VALHALLA_JNI_WITH_TIMEOUT(Java_global_tada_valhalla_Actor_nativeIsochroneWithTimeout,
+                          isochrone, "isochrone")
+VALHALLA_JNI_WITH_TIMEOUT(Java_global_tada_valhalla_Actor_nativeTraceRouteWithTimeout,
+                          trace_route, "trace_route")
+VALHALLA_JNI_WITH_TIMEOUT(Java_global_tada_valhalla_Actor_nativeTraceAttributesWithTimeout,
+                          trace_attributes, "trace_attributes")
+
+#undef VALHALLA_JNI_WITH_TIMEOUT
 
 /**
  * Provides height information.

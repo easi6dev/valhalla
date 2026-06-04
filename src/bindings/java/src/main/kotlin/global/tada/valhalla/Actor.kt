@@ -31,7 +31,7 @@ import java.util.concurrent.CompletableFuture
  * val result = actor.route("""{"locations": [...]}""")
  * ```
  */
-class Actor(config: String) : AutoCloseable {
+class Actor(config: String, private val sharedReaderHandle: Long = 0L) : AutoCloseable {
 
     enum class OperatingSystem(val identifier: String, val suffix: String, val isPosix: Boolean = true) {
         WINDOWS("win", ".dll", isPosix = false), // only supports amd64
@@ -356,6 +356,32 @@ class Actor(config: String) : AutoCloseable {
             val config = File(configFile).readText()
             return Actor(config)
         }
+
+        /**
+         * Creates a shared [GraphReader] backed by a [SynchronizedTileCache] so it can be
+         * used concurrently by multiple [Actor] instances.
+         *
+         * Lifecycle: the caller owns the handle and must call [destroySharedReader] after all
+         * [Actor] instances created with this handle have been [closed][Actor.close].
+         *
+         * @param config Valhalla configuration JSON (same string passed to [Actor])
+         * @return opaque handle to the native GraphReader; pass to [Actor] constructor
+         */
+        @JvmStatic
+        fun createSharedReader(config: String): Long = nativeCreateReader(config)
+
+        /**
+         * Destroys a shared [GraphReader] handle returned by [createSharedReader].
+         * Must only be called after every [Actor] that uses this handle has been closed.
+         */
+        @JvmStatic
+        fun destroySharedReader(handle: Long) = nativeDestroyReader(handle)
+
+        @JvmStatic
+        private external fun nativeCreateReader(config: String): Long
+
+        @JvmStatic
+        private external fun nativeDestroyReader(handle: Long)
     }
 
     /**
@@ -372,7 +398,11 @@ class Actor(config: String) : AutoCloseable {
 
     init {
         validateTileDirectory(config)
-        nativeHandle = nativeCreate(config)
+        nativeHandle = if (sharedReaderHandle == 0L) {
+            nativeCreate(config)
+        } else {
+            nativeCreateWithSharedReader(config, sharedReaderHandle)
+        }
         if (nativeHandle == 0L) {
             throw ValhallaException("Failed to create native actor")
         }
@@ -422,6 +452,8 @@ class Actor(config: String) : AutoCloseable {
      * @return Native object pointer
      */
     private external fun nativeCreate(config: String): Long
+
+    private external fun nativeCreateWithSharedReader(config: String, readerHandle: Long): Long
 
     /**
      * Destroys the native actor object.
@@ -546,6 +578,17 @@ class Actor(config: String) : AutoCloseable {
      * @return Result byte array
      */
     private external fun nativeTile(handle: Long, request: String): ByteArray
+
+    // ── Per-request-timeout native variants (Phase 4) ────────────────────────
+    // Pass a wall-clock budget (ms) into the native action; the engine aborts via
+    // a deadline interrupt when exceeded, freeing the actor. timeoutMs <= 0 means
+    // no deadline. Only the long-running actions have these.
+    private external fun nativeRouteWithTimeout(handle: Long, request: String, timeoutMs: Long): String
+    private external fun nativeMatrixWithTimeout(handle: Long, request: String, timeoutMs: Long): String
+    private external fun nativeOptimizedRouteWithTimeout(handle: Long, request: String, timeoutMs: Long): String
+    private external fun nativeIsochroneWithTimeout(handle: Long, request: String, timeoutMs: Long): String
+    private external fun nativeTraceRouteWithTimeout(handle: Long, request: String, timeoutMs: Long): String
+    private external fun nativeTraceAttributesWithTimeout(handle: Long, request: String, timeoutMs: Long): String
 
     // ========================================
     // Public Synchronous API
@@ -717,8 +760,59 @@ class Actor(config: String) : AutoCloseable {
     }
 
     // ========================================
+    // Public Synchronous API — per-request timeout (Phase 4)
+    // ========================================
+    // Enforces a wall-clock budget on long-running actions: if the engine exceeds
+    // [timeoutMs] it aborts and throws ValhallaException, so a pathological request
+    // can't pin a (pooled) actor indefinitely. timeoutMs <= 0 disables the deadline.
+
+    /** [route] with a per-request wall-clock budget in milliseconds. */
+    fun route(request: String, timeoutMs: Long): String {
+        checkClosed()
+        return nativeRouteWithTimeout(nativeHandle, request, timeoutMs)
+    }
+
+    /** [matrix] with a per-request wall-clock budget in milliseconds. */
+    fun matrix(request: String, timeoutMs: Long): String {
+        checkClosed()
+        return nativeMatrixWithTimeout(nativeHandle, request, timeoutMs)
+    }
+
+    /** [optimizedRoute] with a per-request wall-clock budget in milliseconds. */
+    fun optimizedRoute(request: String, timeoutMs: Long): String {
+        checkClosed()
+        return nativeOptimizedRouteWithTimeout(nativeHandle, request, timeoutMs)
+    }
+
+    /** [isochrone] with a per-request wall-clock budget in milliseconds. */
+    fun isochrone(request: String, timeoutMs: Long): String {
+        checkClosed()
+        return nativeIsochroneWithTimeout(nativeHandle, request, timeoutMs)
+    }
+
+    /** [traceRoute] (map-matching) with a per-request wall-clock budget in milliseconds. */
+    fun traceRoute(request: String, timeoutMs: Long): String {
+        checkClosed()
+        return nativeTraceRouteWithTimeout(nativeHandle, request, timeoutMs)
+    }
+
+    /** [traceAttributes] (map-matching) with a per-request wall-clock budget in milliseconds. */
+    fun traceAttributes(request: String, timeoutMs: Long): String {
+        checkClosed()
+        return nativeTraceAttributesWithTimeout(nativeHandle, request, timeoutMs)
+    }
+
+    // ========================================
     // Public Asynchronous API (CompletableFuture)
     // ========================================
+    //
+    // ⚠️ DANGER: these *Async methods schedule work on the COMMON ForkJoinPool,
+    // and *Suspend uses Dispatchers.IO. A single Actor is NOT thread-safe — its
+    // native workers keep per-request scratch state with no locking. If two async
+    // calls hit the SAME Actor concurrently you get data races and a SIGSEGV in
+    // GraphTile::node() (see hs_err_pid24873.log). These methods are therefore
+    // deprecated: use global.tada.valhalla.pool.ActorPool (which gives each
+    // concurrent call its own exclusively-held actor), or one Actor per thread.
 
     /**
      * Asynchronously calculates a route.
@@ -726,6 +820,11 @@ class Actor(config: String) : AutoCloseable {
      * @param request Request JSON string
      * @return CompletableFuture with result JSON string
      */
+    @Deprecated(
+        message = "Unsafe on a shared Actor (races the single-threaded native workers). " +
+            "Use ActorPool.withActor { it.route(request) } for safe concurrency.",
+        replaceWith = ReplaceWith("route(request)")
+    )
     fun routeAsync(request: String): CompletableFuture<String> =
         CompletableFuture.supplyAsync { route(request) }
 

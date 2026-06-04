@@ -522,4 +522,192 @@ class GeometryMappingServiceTest {
         assertTrue(json.has("flaggedSegments"))
         assertTrue(json.has("unmappedSegments"))
     }
+
+    // --- Sibling-edge fanout tests (trace_attributes-based) ---
+
+    /** Encode (level, tileId, edgeIndex) into the packed GraphId trace_attributes returns. */
+    private fun packGraphId(level: Long, tileId: Long, edgeIndex: Long): Long =
+        level or (tileId shl 3) or (edgeIndex shl 25)
+
+    /** Build a mock trace_attributes response with the given list of (way_id, level, tile, index, length). */
+    private fun mockTraceAttributesResponse(edges: List<Map<String, Any>>): String {
+        val arr = JSONArray()
+        for (e in edges) {
+            val obj = JSONObject()
+            obj.put("way_id", e["way_id"] ?: 0L)
+            val packed = packGraphId(
+                (e["level"] as Number).toLong(),
+                (e["tile_id"] as Number).toLong(),
+                (e["edge_index"] as Number).toLong()
+            )
+            obj.put("id", packed)
+            obj.put("length", e["length"] ?: 0.01)
+            arr.put(obj)
+        }
+        return JSONObject().put("edges", arr).toString()
+    }
+
+    @Test
+    fun `fanout adds same-way sibling edges via trace_attributes`() {
+        // locate() returns the best candidate on PIE (way 12345). trace_attributes
+        // then returns 3 edges on the same way (1 == best, 2 new siblings) plus 1
+        // edge on a different way (way 99999) which should be rejected.
+        val locateFn: (String) -> String = {
+            mockLocateResponse(
+                listOf(mapOf("level" to 2, "tile_id" to 100, "id" to 10,
+                    "distance" to 2.0, "heading" to 83.0, "road_class" to "motorway",
+                    "name" to "PIE", "way_id" to 12345L)),
+                listOf(mapOf("level" to 2, "tile_id" to 100, "id" to 11,
+                    "distance" to 3.0, "heading" to 83.0, "road_class" to "motorway",
+                    "name" to "PIE", "way_id" to 12345L))
+            )
+        }
+        val traceAttrFn: (String) -> String = {
+            mockTraceAttributesResponse(listOf(
+                mapOf("way_id" to 12345L, "level" to 2, "tile_id" to 100, "edge_index" to 10),  // = best, deduped
+                mapOf("way_id" to 12345L, "level" to 2, "tile_id" to 100, "edge_index" to 12),  // sibling
+                mapOf("way_id" to 12345L, "level" to 2, "tile_id" to 100, "edge_index" to 13),  // sibling
+                mapOf("way_id" to 99999L, "level" to 2, "tile_id" to 100, "edge_index" to 99)   // different way, rejected
+            ))
+        }
+
+        val service = GeometryMappingService(locateFn, traceAttrFn)
+        val mapping = service.buildMapping(listOf(makeSpeedBand()))
+
+        val seg = mapping.segments["100001"]
+        assertNotNull(seg)
+        assertNotNull(seg.bestCandidate)
+        assertEquals(2, seg.siblingEdges.size)
+        assertTrue(seg.siblingEdges.any { it.edgeIndex == 12 })
+        assertTrue(seg.siblingEdges.any { it.edgeIndex == 13 })
+        // best (edge 10) should NOT appear in siblings
+        assertTrue(seg.siblingEdges.none { it.edgeIndex == 10 })
+        // different-way edge should NOT appear
+        assertTrue(seg.siblingEdges.none { it.edgeIndex == 99 })
+
+        // tileToEdges should now include all 3 same-way edges (best + 2 siblings)
+        val tileKey = TileKey(2, 100)
+        val edgesInTile = mapping.tileToEdges[tileKey]
+        assertNotNull(edgesInTile)
+        assertTrue(edgesInTile.contains(10))
+        assertTrue(edgesInTile.contains(12))
+        assertTrue(edgesInTile.contains(13))
+        assertTrue(!edgesInTile.contains(99))
+    }
+
+    @Test
+    fun `fanout disabled when traceAttributesFn is null`() {
+        val locateFn: (String) -> String = {
+            mockLocateResponse(
+                listOf(mapOf("level" to 2, "tile_id" to 100, "id" to 10,
+                    "distance" to 2.0, "heading" to 83.0, "road_class" to "motorway",
+                    "name" to "PIE", "way_id" to 12345L)),
+                listOf(mapOf("level" to 2, "tile_id" to 100, "id" to 11,
+                    "distance" to 3.0, "heading" to 83.0, "road_class" to "motorway",
+                    "name" to "PIE", "way_id" to 12345L))
+            )
+        }
+
+        val service = GeometryMappingService(locateFn) // no trace fn
+        val mapping = service.buildMapping(listOf(makeSpeedBand()))
+
+        val seg = mapping.segments["100001"]
+        assertNotNull(seg)
+        assertNotNull(seg.bestCandidate)
+        assertEquals(0, seg.siblingEdges.size)
+    }
+
+    @Test
+    fun `fanout skipped when best osmWayId is zero`() {
+        // best has no way_id → can't safely filter trace_attributes results.
+        val locateFn: (String) -> String = {
+            mockLocateResponse(
+                listOf(mapOf("level" to 2, "tile_id" to 100, "id" to 10,
+                    "distance" to 2.0, "heading" to 83.0, "road_class" to "motorway",
+                    "name" to "PIE")),  // no way_id → defaults to 0
+                listOf(mapOf("level" to 2, "tile_id" to 100, "id" to 11,
+                    "distance" to 3.0, "heading" to 83.0, "road_class" to "motorway",
+                    "name" to "PIE"))
+            )
+        }
+        var traceCallCount = 0
+        val traceAttrFn: (String) -> String = {
+            traceCallCount++
+            mockTraceAttributesResponse(listOf())
+        }
+
+        val service = GeometryMappingService(locateFn, traceAttrFn)
+        val mapping = service.buildMapping(listOf(makeSpeedBand()))
+
+        val seg = mapping.segments["100001"]
+        assertNotNull(seg)
+        assertEquals(0, seg.siblingEdges.size)
+        // trace_attributes shouldn't be called at all when way_id is zero
+        assertEquals(0, traceCallCount)
+    }
+
+    @Test
+    fun `fanout tolerates trace_attributes failure`() {
+        val locateFn: (String) -> String = {
+            mockLocateResponse(
+                listOf(mapOf("level" to 2, "tile_id" to 100, "id" to 10,
+                    "distance" to 2.0, "heading" to 83.0, "road_class" to "motorway",
+                    "name" to "PIE", "way_id" to 12345L)),
+                listOf(mapOf("level" to 2, "tile_id" to 100, "id" to 11,
+                    "distance" to 3.0, "heading" to 83.0, "road_class" to "motorway",
+                    "name" to "PIE", "way_id" to 12345L))
+            )
+        }
+        val traceAttrFn: (String) -> String = { throw RuntimeException("trace_attributes crashed") }
+
+        val service = GeometryMappingService(locateFn, traceAttrFn)
+        val mapping = service.buildMapping(listOf(makeSpeedBand()))
+
+        // Failure should not crash the mapping; segment still has bestCandidate.
+        val seg = mapping.segments["100001"]
+        assertNotNull(seg)
+        assertNotNull(seg.bestCandidate)
+        assertEquals(0, seg.siblingEdges.size)
+    }
+
+    @Test
+    fun `cache roundtrip preserves siblingEdges`() {
+        val locateFn: (String) -> String = {
+            mockLocateResponse(
+                listOf(mapOf("level" to 2, "tile_id" to 100, "id" to 10,
+                    "distance" to 2.0, "heading" to 83.0, "road_class" to "motorway",
+                    "name" to "PIE", "way_id" to 12345L)),
+                listOf(mapOf("level" to 2, "tile_id" to 100, "id" to 11,
+                    "distance" to 3.0, "heading" to 83.0, "road_class" to "motorway",
+                    "name" to "PIE", "way_id" to 12345L))
+            )
+        }
+        val traceAttrFn: (String) -> String = {
+            mockTraceAttributesResponse(listOf(
+                mapOf("way_id" to 12345L, "level" to 2, "tile_id" to 100, "edge_index" to 12),
+                mapOf("way_id" to 12345L, "level" to 2, "tile_id" to 100, "edge_index" to 13)
+            ))
+        }
+        val service = GeometryMappingService(locateFn, traceAttrFn)
+        val mapping = service.buildMapping(listOf(makeSpeedBand()))
+
+        val tmpFile = java.io.File.createTempFile("geo_sibling_roundtrip", ".json")
+        tmpFile.deleteOnExit()
+        GeometryMappingCache.save(mapping, tmpFile.absolutePath)
+        val loaded = GeometryMappingCache.load(tmpFile.absolutePath)
+        assertNotNull(loaded)
+
+        val seg = loaded.segments["100001"]
+        assertNotNull(seg)
+        assertNotNull(seg.bestCandidate)
+        assertEquals(2, seg.siblingEdges.size)
+        assertTrue(seg.siblingEdges.any { it.edgeIndex == 12 })
+        assertTrue(seg.siblingEdges.any { it.edgeIndex == 13 })
+
+        // Legacy mapping should also surface siblings (length-3 list per linkId).
+        val legacy = GeometryMappingCache.toLegacyEdgeMapping(loaded)
+        val edges = legacy.linkToEdges["100001"]
+        assertNotNull(edges)
+        assertEquals(3, edges.size) // best + 2 siblings
+    }
 }
