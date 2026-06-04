@@ -14,11 +14,16 @@ Add `valhalla-jni.jar` as a dependency in your JVM service and call the `Actor` 
 - Lowest latency (in-process, no network hop)
 - No additional infrastructure
 - Self-contained deployment (native libs bundled in JAR)
-- Thread-safe — single `Actor` instance handles concurrent calls
 
 **Cons:**
 - Requires JVM service (Kotlin/Java)
 - ~500 MB memory per `Actor` instance (tiles loaded on init)
+
+> ⚠️ **Concurrency:** a single `Actor` is **NOT thread-safe** — its native
+> workers keep per-request scratch state with no locking, so concurrent calls on
+> one `Actor` corrupt that state and can SIGSEGV. For any service handling
+> concurrent requests use **`ActorPool`** (see [Concurrency](#concurrency-actorpool-required-for-concurrent-traffic)
+> below), which hands each in-flight call its own exclusively-held actor.
 
 **Use Case:** The standard pattern for all production JVM services integrating Valhalla routing.
 
@@ -308,13 +313,15 @@ services:
 - Reuse `Actor` instances across requests (singleton pattern)
 - Don't create new `Actor` per request
 
-**Example Singleton:**
+**Example (single-threaded / low-concurrency only):**
 ```kotlin
+// OK only if this is never called concurrently. For concurrent traffic, use
+// ActorPool (next section) — a shared Actor under concurrency will crash.
 @Service
 class RoutingService {
     companion object {
         private val actor: Actor by lazy {
-            Actor.createSingapore("/data/valhalla_tiles/singapore")
+            Actor.createForRegion("singapore")
         }
     }
 
@@ -322,20 +329,159 @@ class RoutingService {
 }
 ```
 
+---
+
+## Concurrency: ActorPool (required for concurrent traffic)
+
+A single `Actor` (and `TrafficAwareRouter`, which wraps one) is **single-threaded**.
+To serve concurrent requests safely and with throughput, use
+`global.tada.valhalla.pool.ActorPool`: a fixed pool of `Actor`s where each
+in-flight request borrows one exclusively and returns it when done. This is the
+same model upstream Valhalla's HTTP service uses, and it is the fix for the
+concurrent-call SIGSEGV.
+
+### Spring `@Bean` wiring
+
+```kotlin
+import global.tada.valhalla.pool.ActorPool
+
+@Configuration
+class ValhallaConfig {
+
+    // One pool per region the service serves. Closed on context shutdown.
+    @Bean(destroyMethod = "close")
+    fun routingPool(
+        @Value("\${valhalla.region:singapore}") region: String,
+        @Value("\${valhalla.pool-size:0}") configuredSize: Int
+    ): ActorPool {
+        val poolSize = if (configuredSize > 0) configuredSize
+                       else Runtime.getRuntime().availableProcessors()
+        return ActorPool.forRegion(
+            region = region,
+            poolSize = poolSize,
+            // 256 MiB/actor + reachability 20 + cutoff 10 km are the pooled
+            // defaults; override per your memory budget (see Sizing below).
+            enableTraffic = false,
+            borrowTimeoutMs = 250L
+        )
+    }
+}
+
+@Service
+class RoutingService(private val pool: ActorPool) {
+
+    fun route(request: String): String =
+        pool.withActor { actor -> actor.route(request) }
+}
+```
+
+### Backpressure → HTTP 429
+
+When every actor is busy, `withActor` waits up to `borrowTimeoutMs` then throws
+`ActorPoolExhaustedException`. Map it to **429 Too Many Requests** so overload
+degrades gracefully instead of piling up latency:
+
+```kotlin
+@RestControllerAdvice
+class RoutingExceptionHandler {
+    @ExceptionHandler(ActorPoolExhaustedException::class)
+    fun onExhausted(e: ActorPoolExhaustedException): ResponseEntity<String> =
+        ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+            .header(HttpHeaders.RETRY_AFTER, "1")
+            .body("Routing capacity reached, retry shortly")
+}
+```
+
+### Driver dispatch via the matrix helper (biggest throughput win)
+
+Use `DriverSelection` to rank K candidate drivers for a rider in ONE
+`sources_to_targets` matrix call — instead of K separate `route()` calls. This
+collapses rider→K-drivers from K engine searches to one, and holds a pooled
+actor once instead of K times.
+
+```kotlin
+import global.tada.valhalla.dispatch.DriverSelection
+
+fun assignDriver(rider: DriverSelection.Point,
+                 drivers: List<DriverSelection.Point>): Int? {
+    val ranked = pool.withActor { actor ->
+        DriverSelection.rank(actor, rider, drivers, costing = "auto")
+    }
+    return ranked.firstOrNull()?.index   // nearest reachable driver
+}
+
+// Traffic-aware variant (falls back to predicted speeds when live traffic stale):
+fun assignDriverTrafficAware(router: TrafficAwareRouter,
+                             rider: DriverSelection.Point,
+                             drivers: List<DriverSelection.Point>): Int? =
+    DriverSelection.rankTrafficAware(router, rider, drivers).drivers.firstOrNull()?.index
+```
+
+> Replaces the old per-driver `actor.route()` loop (`findClosestDrivers` in the
+> snippets below). Keep K within the costing's `max_matrix_location_pairs`.
+
+### Per-request timeout
+
+A pathological request can otherwise hold a pooled actor for a long time. Pass a
+wall-clock budget; the native engine aborts at the deadline and frees the actor:
+
+```kotlin
+pool.withActor { actor ->
+    actor.route(request, /* timeoutMs = */ 2_000)   // throws ValhallaException on deadline
+}
+```
+
+Available on the long-running actions: `route`, `matrix`, `optimizedRoute`,
+`isochrone`, `traceRoute`, `traceAttributes` (the last two are map-matching).
+
+### Map-matching (trace_route / trace_attributes)
+
+Map-matching goes through the same pool — borrow an actor and call
+`traceRoute`/`traceAttributes`. Pooled actors use a smaller Meili grid cache
+(`meiliGridCacheSize`, default 25000 vs 100240) so concurrent map-matching does
+not multiply per-actor memory by pool size. Tune via `ActorPool.forRegion(...,
+meiliGridCacheSize = ...)` if your traces are denser.
+
+### Sizing — memory budget
+
+Each actor adds ~`maxCacheSizeBytes` of native graph cache **on top of** the JVM
+heap. Keep:
+
+```
+JVM_Xmx  +  poolSize × maxCacheSizeBytes  +  headroom  ≤  container RAM
+```
+
+Example: container 6 GiB, `Xmx` 2 GiB, cache 256 MiB/actor, headroom ≈ 1 GiB
+→ `poolSize ≤ (6 − 2 − 1) GiB / 256 MiB ≈ 12`. Routing is CPU-bound, so a good
+starting `poolSize` is `availableProcessors()` capped by this budget. The mmap'd
+`tile_extract` is OS-page-cache backed and **shared** across actors, so it is
+*not* multiplied by poolSize.
+
+If a larger pool OOMs, lower `maxCacheSizeBytes` (the per-actor cache) rather
+than dropping the pool — the shared mmap'd extract still backs tile reads.
+
 ### Thread Safety
 
-The JNI `Actor` is thread-safe. You can safely call it from multiple threads:
+> ⚠️ **A single `Actor` is NOT thread-safe.** Do not call one `Actor` from
+> multiple threads, and do **not** use `Actor.routeAsync`/`routeSuspend` on a
+> shared instance — they schedule onto the common `ForkJoinPool` /
+> `Dispatchers.IO` and will race the single-threaded native workers, corrupting
+> state and crashing with a SIGSEGV in `GraphTile::node()`. These `*Async` /
+> `*Suspend` methods are deprecated for this reason.
+
+For concurrent traffic use **`ActorPool`** (next section). It is fully
+thread-safe and gives each in-flight call its own exclusively-held actor.
 
 ```kotlin
 @Service
-class RoutingService(
-    private val actor: Actor = Actor.createSingapore(tilePath)
-) {
-    // Can be called concurrently
-    suspend fun routeAsync(from: Location, to: Location): String =
-        withContext(Dispatchers.IO) {
-            actor.route(buildRequest(from, to))
-        }
+class RoutingService(private val pool: ActorPool) {
+    // Safe under concurrency — each call borrows its own actor.
+    fun route(from: Location, to: Location): String =
+        pool.withActor { it.route(buildRequest(from, to)) }
+
+    // Safe async (dedicated executor, borrow/return per call):
+    fun routeAsync(from: Location, to: Location): CompletableFuture<String> =
+        pool.supplyAsync { it.route(buildRequest(from, to)) }
 }
 ```
 
@@ -415,10 +561,14 @@ class RoutingMetricsService(
 
 - [ ] Native libraries accessible (LD_LIBRARY_PATH or bundled)
 - [ ] Tile data volume mounted/copied
-- [ ] Sufficient memory allocated (2GB+ recommended)
+- [ ] **`ActorPool` used for concurrent traffic — never a shared `Actor`**
+- [ ] **Pool size fits the memory budget: `Xmx + poolSize×cache + headroom ≤ container RAM`**
+- [ ] **`ActorPoolExhaustedException` mapped to HTTP 429**
+- [ ] **Per-request timeout set on route/matrix/trace calls**
+- [ ] Driver dispatch uses `DriverSelection` (matrix), not a per-driver route loop
+- [ ] Sufficient memory allocated (see budget formula)
 - [ ] Health check endpoint configured
-- [ ] Metrics/logging enabled
-- [ ] Connection pooling configured (if using REST)
+- [ ] Metrics/logging enabled (incl. `valhalla_pool_*` gauges)
 - [ ] Error handling and retries implemented
 - [ ] Horizontal scaling strategy defined
 
@@ -606,6 +756,11 @@ println("Optimized route: ${optimized.totalDistanceKm} km")
 ```
 
 ### 6. Driver Dispatch - Find Closest Drivers
+
+> **Prefer `DriverSelection`** (see [Concurrency](#concurrency-actorpool-required-for-concurrent-traffic)).
+> The snippet below is illustrative of the raw matrix call; `DriverSelection.rank`
+> wraps it, handles both matrix response shapes (verbose + slim), excludes
+> unreachable drivers, and is pool-safe.
 
 ```kotlin
 // Find nearest N drivers to a pickup location

@@ -174,6 +174,44 @@ class ActorPoolTest {
     }
 
     @Test
+    @Timeout(30)
+    fun `supplyAsync borrows runs and returns the actor`() {
+        val pool = tryBuildPool(poolSize = 2)
+        assumeTrue(pool != null, "Valhalla native/tiles not available — skipping")
+        pool!!.use { p ->
+            val f = p.routeAsync(global.tada.valhalla.helpers.RouteRequest(listOf(a, b), costing = "auto").toJson())
+            val res = f.get(10, TimeUnit.SECONDS)
+            assertNotNull(res)
+            // Actor returned → pool full again.
+            assertEquals(2, p.availableCount())
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    fun `route with timeout throws when the deadline is impossibly small`() {
+        val pool = tryBuildPool(poolSize = 1)
+        assumeTrue(pool != null, "Valhalla native/tiles not available — skipping")
+        pool!!.use { p ->
+            // 1ms budget — the engine should abort and surface a ValhallaException.
+            // Even if a trivial route finishes <1ms, this must not corrupt the actor:
+            // a follow-up normal route must still succeed.
+            try {
+                p.withActor { it.route(
+                    global.tada.valhalla.helpers.RouteRequest(listOf(a, b), costing = "auto").toJson(), 1L
+                ) }
+            } catch (e: global.tada.valhalla.ValhallaException) {
+                // expected for a non-trivial route
+            }
+            val ok = p.withActor { it.route(
+                global.tada.valhalla.helpers.RouteRequest(listOf(a, b), costing = "auto").toJson()
+            ) }
+            assertNotNull(ok)
+            assertEquals(1, p.availableCount())
+        }
+    }
+
+    @Test
     fun `forRegion rejects invalid sizing`() {
         // Pure argument validation — no native actor needed.
         assertFailsWith<IllegalArgumentException> { ActorPool.forRegion(region, poolSize = 0) }

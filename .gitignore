@@ -148,3 +148,9 @@ src/bindings/java/gradle-8.5/
 /.claude/STATUS_LINE_README.md
 /.mcp.json
 /CLAUDE.md
+
+# Build/pipeline logs (local artifacts)
+logs/
+
+# Local planning/working docs (not committed)
+tasks/

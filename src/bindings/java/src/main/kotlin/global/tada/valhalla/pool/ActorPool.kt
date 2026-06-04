@@ -4,6 +4,10 @@ import global.tada.valhalla.Actor
 import global.tada.valhalla.config.RegionConfigFactory
 import global.tada.valhalla.metrics.ValhallaMetrics
 import org.slf4j.LoggerFactory
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * A fixed-size pool of [Actor] instances for concurrent routing.
@@ -48,6 +52,16 @@ class ActorPool private constructor(
     // the native engine). ActorPool just supplies real Actors + region wiring.
     private val queue = BorrowQueue(actors, borrowTimeoutMs) { it.close() }
 
+    // Dedicated executor for the async helpers — NOT the common ForkJoinPool
+    // (which the deprecated Actor.*Async used and which is shared process-wide).
+    // Sized to the pool: more async threads than actors just means more threads
+    // blocked on borrow(). Daemon so it never blocks JVM shutdown.
+    private val asyncExecutor = Executors.newFixedThreadPool(poolSize, object : ThreadFactory {
+        private val n = AtomicInteger(0)
+        override fun newThread(r: Runnable): Thread =
+            Thread(r, "valhalla-pool-async-${n.incrementAndGet()}").apply { isDaemon = true }
+    })
+
     init {
         require(actors.size == poolSize) {
             "Pool was given ${actors.size} actors but poolSize=$poolSize"
@@ -74,6 +88,27 @@ class ActorPool private constructor(
             giveBack(actor)
         }
     }
+
+    /**
+     * Safe async borrow: runs [block] with an exclusively-held actor on the
+     * pool's own executor (NOT the common ForkJoinPool) and returns its result
+     * as a [CompletableFuture]. Borrow/return is automatic. This is the safe
+     * replacement for the deprecated `Actor.*Async` methods.
+     *
+     * ```kotlin
+     * pool.supplyAsync { it.route(req) }.thenAccept { ... }
+     * ```
+     */
+    fun <T> supplyAsync(timeoutMs: Long = borrowTimeoutMs, block: (Actor) -> T): CompletableFuture<T> =
+        CompletableFuture.supplyAsync({ withActor(timeoutMs, block) }, asyncExecutor)
+
+    /** Convenience: async route on a pooled actor (safe replacement for Actor.routeAsync). */
+    fun routeAsync(request: String): CompletableFuture<String> =
+        supplyAsync { it.route(request) }
+
+    /** Convenience: async matrix on a pooled actor. */
+    fun matrixAsync(request: String): CompletableFuture<String> =
+        supplyAsync { it.matrix(request) }
 
     /**
      * Borrow an actor without a lambda (for Java callers / non-block flows).
@@ -138,6 +173,7 @@ class ActorPool private constructor(
     override fun close() {
         if (queue.isClosed()) return
         logger.info("Closing ActorPool (poolSize={})", poolSize)
+        asyncExecutor.shutdown()
         queue.close()
         ValhallaMetrics.setPoolSize(0)
         logger.info("ActorPool closed")

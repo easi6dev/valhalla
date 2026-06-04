@@ -8,6 +8,8 @@
 #include <boost/property_tree/ptree.hpp>
 #include <jni.h>
 
+#include <chrono>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -172,6 +174,34 @@ vt::actor_t* handle_to_actor(jlong handle) {
   return reinterpret_cast<vt::actor_t*>(handle);
 }
 
+/**
+ * Builds a deadline-based interrupt functor for an action.
+ *
+ * Valhalla calls the interrupt periodically during loki/thor/meili work; when it
+ * throws, the action aborts and the actor is freed for the next request. We use
+ * this to enforce a per-request wall-clock budget from Java: a runaway or
+ * pathological request can't pin a pooled actor indefinitely.
+ *
+ * @param timeout_ms budget in milliseconds; <= 0 means "no deadline" (nullptr)
+ * @return a shared_ptr to the functor (kept alive for the duration of the call),
+ *         or nullptr when no deadline is requested
+ */
+std::shared_ptr<std::function<void()>> make_deadline_interrupt(jlong timeout_ms) {
+  if (timeout_ms <= 0) {
+    return nullptr;
+  }
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  return std::make_shared<std::function<void()>>([deadline, timeout_ms]() {
+    if (std::chrono::steady_clock::now() > deadline) {
+      // Plain std::runtime_error → mapped to ValhallaException by the JNI catch
+      // blocks below (no numeric code needed, unlike valhalla_exception_t).
+      throw std::runtime_error(
+          "Request exceeded the per-request timeout of " + std::to_string(timeout_ms) + "ms");
+    }
+  });
+}
+
 } // namespace
 
 extern "C" {
@@ -321,6 +351,38 @@ JNIEXPORT jstring JNICALL Java_global_tada_valhalla_Actor_nativeRoute(JNIEnv* en
     std::string request = jstring_to_string(env, request_str);
     std::string result = actor->route(request);
 
+    return string_to_jstring(env, result);
+  } catch (const std::exception& e) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException", e.what());
+    return nullptr;
+  } catch (...) {
+    throwJavaException(env, "global/tada/valhalla/ValhallaException", "Unknown error in route");
+    return nullptr;
+  }
+}
+
+/**
+ * Calculates a route with a per-request wall-clock deadline (timeout_ms).
+ * timeout_ms <= 0 behaves exactly like nativeRoute (no deadline).
+ *
+ * Class:     global_tada_valhalla_Actor
+ * Method:    nativeRouteWithTimeout
+ * Signature: (JLjava/lang/String;J)Ljava/lang/String;
+ */
+JNIEXPORT jstring JNICALL Java_global_tada_valhalla_Actor_nativeRouteWithTimeout(
+    JNIEnv* env, jobject /* obj */, jlong handle, jstring request_str, jlong timeout_ms) {
+  if (env->EnsureLocalCapacity(5) != 0) {
+    return nullptr;
+  }
+  try {
+    vt::actor_t* actor = handle_to_actor(handle);
+    if (actor == nullptr) {
+      throwJavaException(env, "global/tada/valhalla/ValhallaException", "Invalid actor handle");
+      return nullptr;
+    }
+    std::string request = jstring_to_string(env, request_str);
+    auto interrupt = make_deadline_interrupt(timeout_ms);
+    std::string result = actor->route(request, interrupt.get());
     return string_to_jstring(env, result);
   } catch (const std::exception& e) {
     throwJavaException(env, "global/tada/valhalla/ValhallaException", e.what());
@@ -523,6 +585,50 @@ Java_global_tada_valhalla_Actor_nativeTraceAttributes(JNIEnv* env,
     return nullptr;
   }
 }
+
+// ── Per-request-timeout variants for the long-running actions ────────────────
+// Each mirrors its non-timeout sibling but passes a deadline interrupt so a
+// runaway request aborts at timeout_ms and frees the actor. timeout_ms <= 0
+// means no deadline (identical to the non-timeout method). Generated via a macro
+// to keep the bodies identical and reviewable; only the actor method differs.
+#define VALHALLA_JNI_WITH_TIMEOUT(JNI_NAME, ACTOR_METHOD, ACTION_LABEL)                            \
+  JNIEXPORT jstring JNICALL JNI_NAME(JNIEnv* env, jobject, jlong handle, jstring request_str,     \
+                                     jlong timeout_ms) {                                           \
+    if (env->EnsureLocalCapacity(5) != 0) {                                                       \
+      return nullptr;                                                                              \
+    }                                                                                              \
+    try {                                                                                          \
+      vt::actor_t* actor = handle_to_actor(handle);                                                \
+      if (actor == nullptr) {                                                                      \
+        throwJavaException(env, "global/tada/valhalla/ValhallaException", "Invalid actor handle"); \
+        return nullptr;                                                                            \
+      }                                                                                            \
+      std::string request = jstring_to_string(env, request_str);                                  \
+      auto interrupt = make_deadline_interrupt(timeout_ms);                                        \
+      std::string result = actor->ACTOR_METHOD(request, interrupt.get());                          \
+      return string_to_jstring(env, result);                                                       \
+    } catch (const std::exception& e) {                                                            \
+      throwJavaException(env, "global/tada/valhalla/ValhallaException", e.what());                  \
+      return nullptr;                                                                              \
+    } catch (...) {                                                                                 \
+      throwJavaException(env, "global/tada/valhalla/ValhallaException",                             \
+                         "Unknown error in " ACTION_LABEL);                                         \
+      return nullptr;                                                                              \
+    }                                                                                              \
+  }
+
+VALHALLA_JNI_WITH_TIMEOUT(Java_global_tada_valhalla_Actor_nativeMatrixWithTimeout,
+                          matrix, "matrix")
+VALHALLA_JNI_WITH_TIMEOUT(Java_global_tada_valhalla_Actor_nativeOptimizedRouteWithTimeout,
+                          optimized_route, "optimized_route")
+VALHALLA_JNI_WITH_TIMEOUT(Java_global_tada_valhalla_Actor_nativeIsochroneWithTimeout,
+                          isochrone, "isochrone")
+VALHALLA_JNI_WITH_TIMEOUT(Java_global_tada_valhalla_Actor_nativeTraceRouteWithTimeout,
+                          trace_route, "trace_route")
+VALHALLA_JNI_WITH_TIMEOUT(Java_global_tada_valhalla_Actor_nativeTraceAttributesWithTimeout,
+                          trace_attributes, "trace_attributes")
+
+#undef VALHALLA_JNI_WITH_TIMEOUT
 
 /**
  * Provides height information.
