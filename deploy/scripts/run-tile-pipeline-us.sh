@@ -8,8 +8,18 @@
 # a change for one region can never break the other's weekly production build.
 #
 # Lifecycle:
-#   OSM acquire → tile build → admin build → tile extract → validate → S3 sync
-#   → swap latest → cleanup → (geometry mapping)
+#   OSM acquire → admin build → elevation acquire → tile build → tile extract
+#   → validate → S3 sync → swap latest → cleanup → (geometry mapping)
+#
+# ELEVATION (when enabled): Skadi .hgt.gz tiles covering the region (group =
+# union of member bounds from regions.json) are downloaded into the versioned
+# tile dir BEFORE the tile build, because valhalla_build_tiles samples them
+# during its Enhance stage to stamp per-edge grade. Without this the build
+# silently emits tiles with no elevation. Toggle precedence is
+# --no-elevation (CLI) > SKIP_ELEVATION (env) > pipeline.<env>.conf. Tune
+# download concurrency with ELEVATION_PARALLELISM (default 8). The .hgt.gz
+# tiles are excluded from the .tar extract (extract packs *.gph only) but ARE
+# included in the S3 sync as part of the versioned tileset.
 #
 # Tiles are written DIRECTLY to VALHALLA_TILE_DIR (set to the shared EFS mount in
 # prod/stage). Phase 6 (swap latest symlink) is what makes a new version live for
@@ -483,6 +493,16 @@ phase_build() {
     set_phase "Phase 2: Admin Build"
 
     if [[ "${DRY_RUN}" == true ]]; then
+        if [[ "${SKIP_ELEVATION}" == true ]]; then
+            log_dry "Elevation disabled — would build tiles without grade data"
+        else
+            local _dry_bbox; _dry_bbox="$(_resolve_elevation_bbox)"
+            if [[ -n "${_dry_bbox}" ]]; then
+                log_dry "Would download elevation tiles for bbox ${_dry_bbox} → ${VERSIONED_TILE_DIR}"
+            else
+                log_dry "Elevation enabled but no bounds in regions.json for '${REGION}' — would build without grade data"
+            fi
+        fi
         log_dry "Would build tiles: ${OSM_FILE} → ${VERSIONED_TILE_DIR}"
         return 0
     fi
@@ -520,6 +540,14 @@ phase_build() {
     # missing admin DB only degrades admin-scoped routing, so we continue.
     _run_admin_build "${build_config}" || log_warn "Admin build failed (non-critical — continuing)"
 
+    # Elevation tiles must exist BEFORE the tile build: valhalla_build_tiles reads
+    # the Skadi .hgt(.gz) tiles from additional_data.elevation (= VERSIONED_TILE_DIR,
+    # set in _generate_build_config) during its Enhance stage to stamp per-edge
+    # grade. The fresh versioned dir is empty, so without this download the build
+    # silently produces tiles with NO elevation data. Non-critical: a failed
+    # download only degrades grade-aware costing, so we warn and continue.
+    _acquire_elevation || log_warn "Elevation acquire failed (non-critical — tiles will build without grade data)"
+
     set_phase "Phase 3: Tile Build"
     retry "${MAX_BUILD_RETRIES}" "${BUILD_RETRY_DELAY}" "Tile build" -- \
         _run_tile_build "${build_config}"
@@ -553,6 +581,111 @@ _generate_build_config() {
     fi
 
     log_info "Build config: ${output}"
+}
+
+# ---------------------------------------------------------------------------
+# Resolve the elevation bounding box for the current region/group.
+# Echoes "minLon,minLat,maxLon,maxLat" (the format valhalla_build_elevation
+# --from-bbox expects). For a tile group it is the UNION of every member
+# region's bounds (so a shared tri-state tileset covers NY+NJ+CT); for a single
+# region it is that region's bounds. Empty output ⇒ no bounds available.
+# ---------------------------------------------------------------------------
+_resolve_elevation_bbox() {
+    local regions_config="${PROJECT_ROOT}/config/regions/regions.json"
+    local filter
+    if [[ "${IS_GROUP}" == true ]]; then
+        # Union over all regions whose tile_group == this group.
+        filter=".regions | map(select(.tile_group==\"${TILE_GROUP}\") | .bounds)"
+    else
+        # Single region: wrap its bounds in a 1-element array for the same reducer.
+        filter="[.regions.${REGION}.bounds]"
+    fi
+
+    jq -r "
+        ${filter}
+        | map(select(. != null))
+        | if length == 0 then empty
+          else
+            \"\(map(.min_lon) | min),\(map(.min_lat) | min),\(map(.max_lon) | max),\(map(.max_lat) | max)\"
+          end
+    " "${regions_config}" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Download Skadi elevation tiles covering the region into VERSIONED_TILE_DIR.
+# Skipped when SKIP_ELEVATION=true (so --no-elevation skips this too, keeping
+# the flag's meaning consistent with _generate_build_config). Mirrors the
+# extract step's executor resolution: prefer the in-tree python script (matches
+# this checkout), then a system binary, then Docker. Idempotent-ish: the
+# downloader skips tiles already present, so a retried run is cheap.
+# ---------------------------------------------------------------------------
+_acquire_elevation() {
+    if [[ "${SKIP_ELEVATION}" == true ]]; then
+        log_info "Elevation disabled (SKIP_ELEVATION/--no-elevation) — skipping elevation download"
+        return 0
+    fi
+
+    local bbox
+    bbox="$(_resolve_elevation_bbox)"
+    if [[ -z "${bbox}" ]]; then
+        log_warn "No bounds found in regions.json for '${REGION}' — cannot download elevation. Tiles will build without grade data."
+        return 0
+    fi
+
+    if [[ "${DRY_RUN}" == true ]]; then
+        log_dry "Would download elevation tiles for bbox ${bbox} → ${VERSIONED_TILE_DIR}"
+        return 0
+    fi
+
+    log_info "Elevation bbox (${IS_GROUP:+group }${REGION}): ${bbox}"
+    log_info "Downloading Skadi elevation tiles → ${VERSIONED_TILE_DIR}"
+
+    local elev_log="${VALHALLA_LOG_DIR}/elevation-${TILE_SUBDIR}-${RUN_ID}.log"
+    local parallelism="${ELEVATION_PARALLELISM:-8}"
+
+    if [[ "${USE_DOCKER}" == true ]]; then
+        # The valhalla image ships valhalla_build_elevation on PATH. Mount the
+        # versioned tile dir as the output target (same mount the tile build uses).
+        docker run --rm \
+            -v "${VERSIONED_TILE_DIR}:/valhalla/tiles" \
+            "${VALHALLA_DOCKER_IMAGE}" \
+            valhalla_build_elevation \
+            --from-bbox "${bbox}" \
+            --outdir /valhalla/tiles \
+            --parallelism "${parallelism}" -v \
+            2>&1 | tee -a "${elev_log}" | _log_stream "ELEVATION"
+        local elev_exit=${PIPESTATUS[0]:-$?}
+    else
+        local elev_script="${PROJECT_ROOT}/scripts/valhalla_build_elevation"
+        local runner=()
+        if [[ -x "${elev_script}" ]]; then
+            runner=(python3 "${elev_script}")
+        elif command -v valhalla_build_elevation &>/dev/null; then
+            runner=(valhalla_build_elevation)
+        else
+            log_warn "valhalla_build_elevation not found (checked ${elev_script} and PATH) — skipping elevation"
+            return 0
+        fi
+        "${runner[@]}" \
+            --from-bbox "${bbox}" \
+            --outdir "${VERSIONED_TILE_DIR}" \
+            --parallelism "${parallelism}" -v \
+            2>&1 | tee -a "${elev_log}" | _log_stream "ELEVATION"
+        local elev_exit=${PIPESTATUS[0]:-$?}
+    fi
+
+    if [[ ${elev_exit} -ne 0 ]]; then
+        log_error "Elevation download failed (exit ${elev_exit})"
+        return 1
+    fi
+
+    local hgt_count
+    hgt_count="$(find "${VERSIONED_TILE_DIR}" -name "*.hgt*" 2>/dev/null | wc -l)"
+    if [[ ${hgt_count} -eq 0 ]]; then
+        log_warn "Elevation download reported success but no .hgt tiles found in ${VERSIONED_TILE_DIR}"
+        return 1
+    fi
+    log_ok "Elevation tiles ready: ${hgt_count} tiles ($(du -sh "${VERSIONED_TILE_DIR}" 2>/dev/null | cut -f1) incl. graph)"
 }
 
 _run_tile_build() {
@@ -1073,9 +1206,22 @@ main() {
         esac
     done
 
-    [[ -n "${SKIP_ELEVATION_ARG}" ]] && SKIP_ELEVATION=true
+    # SKIP_ELEVATION precedence: CLI flag (--no-elevation) > env var > conf file.
+    # bootstrap()'s _load_pipeline_config sources the conf, which sets
+    # SKIP_ELEVATION and would otherwise clobber both the flag and an env
+    # override. Capture any pre-bootstrap env value here, then re-assert the
+    # correct precedence AFTER bootstrap (below).
+    local skip_elev_env="${SKIP_ELEVATION:-}"
 
     bootstrap
+
+    # Re-apply precedence now that the conf has been sourced.
+    if [[ -n "${SKIP_ELEVATION_ARG}" ]]; then
+        SKIP_ELEVATION=true                       # --no-elevation always wins
+    elif [[ -n "${skip_elev_env}" ]]; then
+        SKIP_ELEVATION="${skip_elev_env}"         # explicit env beats conf
+    fi
+
     if [[ "${SKIP_BUILD}" == true ]]; then
         local existing_latest="${LATEST_LINK}"
         if [[ ! -e "${existing_latest}" ]]; then
