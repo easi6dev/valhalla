@@ -65,9 +65,6 @@ VALHALLA_LOG_DIR=logs
 # Recommended: false for prod, true for dev/test/staging
 SKIP_ELEVATION=true
 
-# Clean existing tiles before building (true = full rebuild from scratch)
-CLEAN_BUILD=false
-
 # ---------------------------------------------------------------------------
 # S3 / Object storage (staging and prod only — leave blank for local/dev)
 # ---------------------------------------------------------------------------

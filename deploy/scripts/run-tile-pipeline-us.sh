@@ -58,6 +58,7 @@
 #   --force-download          Re-download + re-merge OSM even if fresh
 #   --osm-max-age-days <n>    Re-merge if merged OSM is older than N days (default: 6)
 #   --no-elevation            Skip elevation data (faster build)
+#   --with-elevation          Force-include elevation data (overrides conf/env)
 #   --skip-build              Skip OSM + tile build; operate on existing 'latest'
 #   --skip-geometry-mapping   Skip the geometry-mapping job (default: skipped for US)
 #   --with-geometry-mapping   Force-run the geometry-mapping job
@@ -1118,6 +1119,7 @@ Options:
   --force-download          Re-download + re-merge OSM even if fresh
   --osm-max-age-days <n>    Max OSM age before re-acquire (default: 6)
   --no-elevation            Skip elevation data
+  --with-elevation          Force-include elevation data (overrides conf/env)
   --skip-build              Skip OSM + tile build; operate on existing 'latest'
   --skip-geometry-mapping   Skip geometry-mapping (default for US)
   --with-geometry-mapping   Force-run geometry-mapping
@@ -1141,6 +1143,9 @@ Examples:
 
   # Production US — uses pipeline.prod-us.conf automatically
   VALHALLA_ENV=prod-us ./run-tile-pipeline-us.sh new_york
+
+  # Staging US with elevation forced on (staging conf skips it by default)
+  VALHALLA_ENV=stage-us ./run-tile-pipeline-us.sh new_york --with-elevation
 
   # Dry-run (verify a newly-added region resolves correctly before a real build)
   VALHALLA_ENV=prod-us ./run-tile-pipeline-us.sh new_york --dry-run
@@ -1194,6 +1199,7 @@ main() {
             --force-download)         FORCE_DOWNLOAD=true;        shift   ;;
             --osm-max-age-days)       OSM_MAX_AGE_DAYS="$2";     shift 2 ;;
             --no-elevation)           SKIP_ELEVATION_ARG=true;   shift   ;;
+            --with-elevation)         SKIP_ELEVATION_ARG=false;  shift   ;;
             --skip-build)             SKIP_BUILD=true;            shift   ;;
             --skip-geometry-mapping)  SKIP_GEOMETRY_MAPPING=true; shift   ;;
             --with-geometry-mapping)  SKIP_GEOMETRY_MAPPING=false; shift  ;;
@@ -1206,18 +1212,19 @@ main() {
         esac
     done
 
-    # SKIP_ELEVATION precedence: CLI flag (--no-elevation) > env var > conf file.
-    # bootstrap()'s _load_pipeline_config sources the conf, which sets
-    # SKIP_ELEVATION and would otherwise clobber both the flag and an env
-    # override. Capture any pre-bootstrap env value here, then re-assert the
+    # SKIP_ELEVATION precedence: CLI flag (--no-elevation/--with-elevation) >
+    # env var > conf file. bootstrap()'s _load_pipeline_config sources the conf,
+    # which sets SKIP_ELEVATION and would otherwise clobber both the flag and an
+    # env override. Capture any pre-bootstrap env value here, then re-assert the
     # correct precedence AFTER bootstrap (below).
     local skip_elev_env="${SKIP_ELEVATION:-}"
 
     bootstrap
 
-    # Re-apply precedence now that the conf has been sourced.
+    # Re-apply precedence now that the conf has been sourced. SKIP_ELEVATION_ARG
+    # is "true" for --no-elevation, "false" for --with-elevation, "" if neither.
     if [[ -n "${SKIP_ELEVATION_ARG}" ]]; then
-        SKIP_ELEVATION=true                       # --no-elevation always wins
+        SKIP_ELEVATION="${SKIP_ELEVATION_ARG}"    # explicit CLI flag always wins
     elif [[ -n "${skip_elev_env}" ]]; then
         SKIP_ELEVATION="${skip_elev_env}"         # explicit env beats conf
     fi
