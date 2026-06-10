@@ -15,6 +15,7 @@
 #   --force-download          Re-download OSM even if file is fresh
 #   --osm-max-age-days <n>    Re-download if OSM file is older than N days (default: 6)
 #   --no-elevation            Skip elevation data (faster build)
+#   --with-elevation          Force-include elevation data (overrides conf/env)
 #   --dry-run                 Print what would happen, do not execute
 #   --keep-versions <n>       Number of old tile versions to keep (default: 3)
 #   --notify-url <url>        Webhook URL for completion/failure notification
@@ -1141,6 +1142,7 @@ Options:
   --force-download          Re-download OSM even if fresh
   --osm-max-age-days <n>    Max OSM file age before re-download (default: 6)
   --no-elevation            Skip elevation data
+  --with-elevation          Force-include elevation data (overrides conf/env)
   --skip-build              Skip OSM download and tile build; validate existing 'latest' tiles
   --skip-geometry-mapping   Skip the geometry-mapping job after tile swap
   --no-extract              Skip building the .tar tile extract (index.bin)
@@ -1212,6 +1214,7 @@ main() {
             --force-download)   FORCE_DOWNLOAD=true;        shift   ;;
             --osm-max-age-days) OSM_MAX_AGE_DAYS="$2";     shift 2 ;;
             --no-elevation)     SKIP_ELEVATION_ARG=true;   shift   ;;
+            --with-elevation)   SKIP_ELEVATION_ARG=false;  shift   ;;
             --skip-build)       SKIP_BUILD=true;            shift   ;;
             --skip-geometry-mapping) SKIP_GEOMETRY_MAPPING=true; shift ;;
             --no-extract)       BUILD_EXTRACT=false;        shift   ;;
@@ -1223,11 +1226,23 @@ main() {
         esac
     done
 
-    # CLI --no-elevation overrides config file value
-    [[ -n "${SKIP_ELEVATION_ARG}" ]] && SKIP_ELEVATION=true
+    # SKIP_ELEVATION precedence: CLI flag (--no-elevation/--with-elevation) >
+    # env var > conf file. bootstrap()'s _load_pipeline_config sources the conf,
+    # which sets SKIP_ELEVATION and would otherwise clobber both the flag and an
+    # env override. Capture any pre-bootstrap env value here, then re-assert the
+    # correct precedence AFTER bootstrap (below).
+    local skip_elev_env="${SKIP_ELEVATION:-}"
 
     # Run pipeline phases
     bootstrap
+
+    # Re-apply precedence now that the conf has been sourced. SKIP_ELEVATION_ARG
+    # is "true" for --no-elevation, "false" for --with-elevation, "" if neither.
+    if [[ -n "${SKIP_ELEVATION_ARG}" ]]; then
+        SKIP_ELEVATION="${SKIP_ELEVATION_ARG}"    # explicit CLI flag always wins
+    elif [[ -n "${skip_elev_env}" ]]; then
+        SKIP_ELEVATION="${skip_elev_env}"         # explicit env beats conf
+    fi
     if [[ "${SKIP_BUILD}" == true ]]; then
         local existing_latest="${VALHALLA_TILE_DIR}/${REGION}/latest"
         if [[ ! -e "${existing_latest}" ]]; then
