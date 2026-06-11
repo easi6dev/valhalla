@@ -221,7 +221,18 @@ bootstrap() {
     fi
     S3_REGION="${S3_REGION:-ap-southeast-1}"
     VALHALLA_BUILD_TILES_BIN="${VALHALLA_BUILD_TILES_BIN:-}"
-    VALHALLA_DOCKER_IMAGE="${VALHALLA_DOCKER_IMAGE:-ghcr.io/valhalla/valhalla:latest}"
+    # NO floating-upstream fallback. The tile builder MUST be a binary/image built
+    # from THIS repo so the tile layout matches the libvalhalla.so.3 in the JNI
+    # JAR; ghcr.io/valhalla/valhalla:latest drifts and causes SIGBUS in costing
+    # (AutoCost::Allowed) on every route. Leave blank only if a from-source
+    # valhalla_build_tiles is on PATH or VALHALLA_BUILD_TILES_BIN is set.
+    VALHALLA_DOCKER_IMAGE="${VALHALLA_DOCKER_IMAGE:-}"
+    if [[ "${VALHALLA_DOCKER_IMAGE}" == ghcr.io/valhalla/valhalla:latest ]]; then
+        log_error "VALHALLA_DOCKER_IMAGE is the floating upstream tag 'ghcr.io/valhalla/valhalla:latest'."
+        log_error "Tiles MUST be built from this repo (docker/Dockerfile.tilebuilder) to match the JAR's libvalhalla.so.3."
+        log_error "Set VALHALLA_DOCKER_IMAGE to your from-source image (e.g. an ECR tag) in pipeline.${VALHALLA_ENV}.conf."
+        exit 1
+    fi
 
     # Derive versioned tile dir for this run
     VERSION_TAG="${RUN_ID}"
@@ -301,6 +312,11 @@ _check_deps() {
     elif command -v valhalla_build_tiles &>/dev/null; then
         log_info "Executor: system valhalla_build_tiles"
     elif command -v docker &>/dev/null; then
+        if [[ -z "${VALHALLA_DOCKER_IMAGE}" ]]; then
+            log_error "No tile builder configured: VALHALLA_BUILD_TILES_BIN is unset, no system valhalla_build_tiles on PATH, and VALHALLA_DOCKER_IMAGE is blank."
+            log_error "Set VALHALLA_DOCKER_IMAGE to a from-source image (docker/Dockerfile.tilebuilder, e.g. an ECR tag) in pipeline.${VALHALLA_ENV}.conf — NOT ghcr.io/valhalla/valhalla:latest."
+            exit 1
+        fi
         USE_DOCKER=true
         log_info "Executor: Docker (${VALHALLA_DOCKER_IMAGE})"
     else
