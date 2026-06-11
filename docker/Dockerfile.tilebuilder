@@ -69,12 +69,19 @@ RUN cmake -B build \
     && cmake --build build \
          --target valhalla_build_tiles valhalla_build_admins \
          -j"$(nproc)" \
-    && cmake --install build --prefix /usr/local
+    && cmake --install build --prefix /usr/local \
+    # valhalla_build_extract + valhalla_build_elevation are CMake-configured
+    # Python scripts (configure_file → build/, see CMakeLists.txt ~362). Copy
+    # them explicitly so they're on PATH regardless of install rules — the US
+    # pipeline needs elevation (Phase 2) and the extract (Phase 3.5).
+    && cp build/valhalla_build_extract build/valhalla_build_elevation /usr/local/bin/
 
-# Smoke-test: both binaries must exist and report a version
+# Smoke-test: binaries + pipeline scripts must exist and run
 RUN valhalla_build_tiles --version 2>&1 | head -1 \
  && valhalla_build_admins --version 2>&1 | head -1 \
- && echo "✅ tile builder binaries verified"
+ && valhalla_build_extract --help >/dev/null 2>&1 \
+ && valhalla_build_elevation --help >/dev/null 2>&1 \
+ && echo "✅ tile builder binaries + scripts verified"
 
 # =============================================================================
 # Stage 2: Runner
@@ -99,21 +106,32 @@ RUN apt-get update && apt-get install -y \
     libluajit-5.1-2 \
     libzmq5 libczmq4 \
     zlib1g \
-    # Tile pipeline utilities
+    # Tile pipeline utilities. python3 runs valhalla_build_extract (Phase 3.5)
+    # and valhalla_build_elevation (Phase 2) — both are pure-stdlib Python scripts.
+    python3 \
     wget curl jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy compiled binaries and shared libraries from builder
-COPY --from=builder /usr/local/bin/valhalla_build_tiles  /usr/local/bin/
-COPY --from=builder /usr/local/bin/valhalla_build_admins /usr/local/bin/
+# Copy compiled binaries, pipeline Python scripts, and shared libraries from builder.
+# valhalla_build_extract (Phase 3.5 .tar pack) and valhalla_build_elevation
+# (Phase 2 Skadi .hgt download) are pure-stdlib Python scripts — without them on
+# PATH the pipeline warns "<tool> not found" and silently skips that step.
+COPY --from=builder /usr/local/bin/valhalla_build_tiles     /usr/local/bin/
+COPY --from=builder /usr/local/bin/valhalla_build_admins    /usr/local/bin/
+COPY --from=builder /usr/local/bin/valhalla_build_extract   /usr/local/bin/
+COPY --from=builder /usr/local/bin/valhalla_build_elevation /usr/local/bin/
 COPY --from=builder /usr/local/lib/libvalhalla*          /usr/local/lib/
 COPY --from=builder /usr/local/share/valhalla/           /usr/local/share/valhalla/
 
 RUN ldconfig
 
-# Final verification — both binaries must run
+# Final verification — binaries + pipeline scripts must run
 RUN valhalla_build_tiles  --version 2>&1 | head -1 \
  && valhalla_build_admins --version 2>&1 | head -1 \
+ && command -v valhalla_build_extract >/dev/null \
+ && valhalla_build_extract --help >/dev/null 2>&1 \
+ && command -v valhalla_build_elevation >/dev/null \
+ && valhalla_build_elevation --help >/dev/null 2>&1 \
  && echo "✅ runner stage verified"
 
 # The pipeline mounts:

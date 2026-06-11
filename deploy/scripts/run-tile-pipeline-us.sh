@@ -140,6 +140,43 @@ log_phase() { _log PHASE "$1"; }
 log_dry()   { _log DRY   "$1"; }
 
 # ---------------------------------------------------------------------------
+# Reject tile-builder images that risk a tile/JAR version skew → SIGBUS.
+# The tile builder's libvalhalla MUST match the libvalhalla.so.3 bundled in the
+# JNI JAR. Two image patterns are forbidden because their version drifts away
+# from the JAR independently:
+#   1. ghcr.io/valhalla/valhalla:latest  — floating UPSTREAM tag (the original
+#      SIGBUS cause). Not built from this repo at all.
+#   2. our ECR repo with a BARE env tag (…/valhalla:development|production|
+#      staging|test) — NOT produced by build-valhalla-image.yml, which only
+#      pushes <branch>-latest and <branch>-<sha>. A bare tag is orphaned/manual
+#      and can point at a different commit than the published JAR.
+# The maintained, JAR-coupled tags are <branch>-latest or <branch>-<sha>
+# (publish-jni-jar.yml extracts the JAR from <branch>-latest).
+# A binary executor (VALHALLA_BUILD_TILES_BIN) or an empty image are NOT rejected
+# here — _check_deps handles the empty-image-with-docker case.
+# ---------------------------------------------------------------------------
+_reject_unsafe_docker_image() {
+    local image="$1"
+    [[ -z "${image}" ]] && return 0
+
+    if [[ "${image}" == ghcr.io/valhalla/valhalla:* ]]; then
+        log_error "VALHALLA_DOCKER_IMAGE is a floating UPSTREAM image: '${image}'."
+        log_error "Tiles MUST be built from THIS repo (docker/Dockerfile.prod / Dockerfile.tilebuilder) to match the JAR's libvalhalla.so.3 — upstream drifts → SIGBUS in AutoCost::Allowed."
+        log_error "Use the CI-built ECR tag instead (e.g. <branch>-latest), set in pipeline.${VALHALLA_ENV}.conf."
+        exit 1
+    fi
+
+    # Bare ECR env tag with no -latest / -<sha> suffix → not CI-maintained.
+    if [[ "${image}" =~ /valhalla:(development|production|staging|test|prod-us|stage-us)$ ]]; then
+        local bare_tag="${image##*:}"
+        log_error "VALHALLA_DOCKER_IMAGE uses the BARE tag '${bare_tag}' (${image})."
+        log_error "build-valhalla-image.yml only publishes '<branch>-latest' and '<branch>-<sha>'. A bare tag is orphaned/manual and may point at a DIFFERENT commit than the published JAR → SIGBUS in AutoCost::Allowed."
+        log_error "Pin to the maintained tag, e.g. '${image}-latest' (the JAR is published from <branch>-latest), in pipeline.${VALHALLA_ENV}.conf."
+        exit 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Exit handler — always emit a final summary
 # ---------------------------------------------------------------------------
 PIPELINE_START_TIME=""
@@ -252,7 +289,13 @@ bootstrap() {
     # US cluster default S3 region (override in pipeline.*-us.conf).
     S3_REGION="${S3_REGION:-us-east-1}"
     VALHALLA_BUILD_TILES_BIN="${VALHALLA_BUILD_TILES_BIN:-}"
-    VALHALLA_DOCKER_IMAGE="${VALHALLA_DOCKER_IMAGE:-ghcr.io/valhalla/valhalla:latest}"
+    # NO floating-upstream fallback. The tile builder MUST be a binary/image built
+    # from THIS repo so the tile layout matches the libvalhalla.so.3 in the JNI
+    # JAR; a version skew causes SIGBUS in costing (AutoCost::Allowed) on every
+    # route. Leave blank only if a from-source valhalla_build_tiles is on PATH or
+    # VALHALLA_BUILD_TILES_BIN is set.
+    VALHALLA_DOCKER_IMAGE="${VALHALLA_DOCKER_IMAGE:-}"
+    _reject_unsafe_docker_image "${VALHALLA_DOCKER_IMAGE}"
 
     VERSION_TAG="${RUN_ID}"
 
@@ -369,6 +412,11 @@ _check_deps() {
     elif command -v valhalla_build_tiles &>/dev/null; then
         log_info "Executor: system valhalla_build_tiles"
     elif command -v docker &>/dev/null; then
+        if [[ -z "${VALHALLA_DOCKER_IMAGE}" ]]; then
+            log_error "No tile builder configured: VALHALLA_BUILD_TILES_BIN is unset, no system valhalla_build_tiles on PATH, and VALHALLA_DOCKER_IMAGE is blank."
+            log_error "Set VALHALLA_DOCKER_IMAGE to a from-source image (docker/Dockerfile.tilebuilder, e.g. an ECR tag) in pipeline.${VALHALLA_ENV}.conf — NOT ghcr.io/valhalla/valhalla:latest."
+            exit 1
+        fi
         USE_DOCKER=true
         log_info "Executor: Docker (${VALHALLA_DOCKER_IMAGE})"
     else
@@ -1221,12 +1269,38 @@ main() {
 
     bootstrap
 
+    # After bootstrap, SKIP_ELEVATION holds the value sourced from the conf
+    # (default false). Capture it before applying env/flag overrides so we can
+    # detect and surface a silent disable.
+    local conf_skip_elev="${SKIP_ELEVATION:-false}"
+
     # Re-apply precedence now that the conf has been sourced. SKIP_ELEVATION_ARG
     # is "true" for --no-elevation, "false" for --with-elevation, "" if neither.
+    local skip_elev_source="conf (pipeline.${VALHALLA_ENV}.conf)"
     if [[ -n "${SKIP_ELEVATION_ARG}" ]]; then
         SKIP_ELEVATION="${SKIP_ELEVATION_ARG}"    # explicit CLI flag always wins
+        skip_elev_source="CLI flag ($([[ "${SKIP_ELEVATION_ARG}" == true ]] && echo --no-elevation || echo --with-elevation))"
     elif [[ -n "${skip_elev_env}" ]]; then
         SKIP_ELEVATION="${skip_elev_env}"         # explicit env beats conf
+        skip_elev_source="env SKIP_ELEVATION=${skip_elev_env}"
+    fi
+
+    # Resolved-state visibility: always log WHAT elevation resolved to and WHY,
+    # so a run that builds without grade data is self-explaining in the log.
+    log_info "Elevation: SKIP_ELEVATION=${SKIP_ELEVATION} (source: ${skip_elev_source})"
+
+    # Loud warning when an env/flag flipped the conf's elevation-ON to OFF for a
+    # region that actually has elevation bounds — i.e. tiles WILL ship without
+    # grade data despite the conf wanting it. This is the exact silent-disable
+    # that produced grade-less NY tiles. Operator can still skip on purpose
+    # (the warning documents the override); we do not override their choice.
+    if [[ "${SKIP_ELEVATION}" == true && "${conf_skip_elev}" != true ]]; then
+        local _elev_bbox; _elev_bbox="$(_resolve_elevation_bbox)"
+        if [[ -n "${_elev_bbox}" ]]; then
+            log_warn "Elevation is DISABLED by ${skip_elev_source}, overriding the conf (SKIP_ELEVATION=${conf_skip_elev})."
+            log_warn "Region '${REGION}' HAS elevation bounds (${_elev_bbox}) — tiles will build WITHOUT per-edge grade."
+            log_warn "To build with elevation, pass --with-elevation or unset the SKIP_ELEVATION env."
+        fi
     fi
 
     if [[ "${SKIP_BUILD}" == true ]]; then
