@@ -140,6 +140,43 @@ log_phase() { _log PHASE "$1"; }
 log_dry()   { _log DRY   "$1"; }
 
 # ---------------------------------------------------------------------------
+# Reject tile-builder images that risk a tile/JAR version skew → SIGBUS.
+# The tile builder's libvalhalla MUST match the libvalhalla.so.3 bundled in the
+# JNI JAR. Two image patterns are forbidden because their version drifts away
+# from the JAR independently:
+#   1. ghcr.io/valhalla/valhalla:latest  — floating UPSTREAM tag (the original
+#      SIGBUS cause). Not built from this repo at all.
+#   2. our ECR repo with a BARE env tag (…/valhalla:development|production|
+#      staging|test) — NOT produced by build-valhalla-image.yml, which only
+#      pushes <branch>-latest and <branch>-<sha>. A bare tag is orphaned/manual
+#      and can point at a different commit than the published JAR.
+# The maintained, JAR-coupled tags are <branch>-latest or <branch>-<sha>
+# (publish-jni-jar.yml extracts the JAR from <branch>-latest).
+# A binary executor (VALHALLA_BUILD_TILES_BIN) or an empty image are NOT rejected
+# here — _check_deps handles the empty-image-with-docker case.
+# ---------------------------------------------------------------------------
+_reject_unsafe_docker_image() {
+    local image="$1"
+    [[ -z "${image}" ]] && return 0
+
+    if [[ "${image}" == ghcr.io/valhalla/valhalla:* ]]; then
+        log_error "VALHALLA_DOCKER_IMAGE is a floating UPSTREAM image: '${image}'."
+        log_error "Tiles MUST be built from THIS repo (docker/Dockerfile.prod / Dockerfile.tilebuilder) to match the JAR's libvalhalla.so.3 — upstream drifts → SIGBUS in AutoCost::Allowed."
+        log_error "Use the CI-built ECR tag instead (e.g. <branch>-latest), set in pipeline.${VALHALLA_ENV}.conf."
+        exit 1
+    fi
+
+    # Bare ECR env tag with no -latest / -<sha> suffix → not CI-maintained.
+    if [[ "${image}" =~ /valhalla:(development|production|staging|test|prod-us|stage-us)$ ]]; then
+        local bare_tag="${image##*:}"
+        log_error "VALHALLA_DOCKER_IMAGE uses the BARE tag '${bare_tag}' (${image})."
+        log_error "build-valhalla-image.yml only publishes '<branch>-latest' and '<branch>-<sha>'. A bare tag is orphaned/manual and may point at a DIFFERENT commit than the published JAR → SIGBUS in AutoCost::Allowed."
+        log_error "Pin to the maintained tag, e.g. '${image}-latest' (the JAR is published from <branch>-latest), in pipeline.${VALHALLA_ENV}.conf."
+        exit 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Exit handler — always emit a final summary
 # ---------------------------------------------------------------------------
 PIPELINE_START_TIME=""
@@ -254,16 +291,11 @@ bootstrap() {
     VALHALLA_BUILD_TILES_BIN="${VALHALLA_BUILD_TILES_BIN:-}"
     # NO floating-upstream fallback. The tile builder MUST be a binary/image built
     # from THIS repo so the tile layout matches the libvalhalla.so.3 in the JNI
-    # JAR; ghcr.io/valhalla/valhalla:latest drifts and causes SIGBUS in costing
-    # (AutoCost::Allowed) on every route. Leave blank only if a from-source
-    # valhalla_build_tiles is on PATH or VALHALLA_BUILD_TILES_BIN is set.
+    # JAR; a version skew causes SIGBUS in costing (AutoCost::Allowed) on every
+    # route. Leave blank only if a from-source valhalla_build_tiles is on PATH or
+    # VALHALLA_BUILD_TILES_BIN is set.
     VALHALLA_DOCKER_IMAGE="${VALHALLA_DOCKER_IMAGE:-}"
-    if [[ "${VALHALLA_DOCKER_IMAGE}" == ghcr.io/valhalla/valhalla:latest ]]; then
-        log_error "VALHALLA_DOCKER_IMAGE is the floating upstream tag 'ghcr.io/valhalla/valhalla:latest'."
-        log_error "Tiles MUST be built from this repo (docker/Dockerfile.tilebuilder) to match the JAR's libvalhalla.so.3."
-        log_error "Set VALHALLA_DOCKER_IMAGE to your from-source image (e.g. an ECR tag) in pipeline.${VALHALLA_ENV}.conf."
-        exit 1
-    fi
+    _reject_unsafe_docker_image "${VALHALLA_DOCKER_IMAGE}"
 
     VERSION_TAG="${RUN_ID}"
 
