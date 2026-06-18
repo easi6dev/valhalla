@@ -1,20 +1,14 @@
 name: Build valhalla Image
 
 on:
+  # These are deployable branches: each deploy pulls <branch>-latest from ECR
+  # unconditionally. A paths: filter here would skip the build whenever a push
+  # touches no watched path, leaving <branch>-latest stale or absent while the
+  # deploy still expects a fresh image (→ "image not found" / version drift).
+  # So every push to a deployable branch must rebuild and republish its tag —
+  # do NOT reintroduce a paths: filter on this trigger.
   push:
     branches: [master, development, test, staging, dist, snapshot]
-    paths:
-      - 'src/**'
-      - 'proto/**'
-      - 'valhalla/**'
-      - 'cmake/**'
-      - 'third_party/**'
-      - 'CMakeLists.txt'
-      - 'libvalhalla.pc.in'
-      - 'docker/Dockerfile.prod'
-      - 'config/**'
-      - 'deploy/**'
-      - '.github/workflows/build-valhalla-image.yml'
   workflow_dispatch:
 
 concurrency:
