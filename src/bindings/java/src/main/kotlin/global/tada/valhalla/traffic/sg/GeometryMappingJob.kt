@@ -39,7 +39,12 @@ import java.util.zip.GZIPInputStream
  * Exit codes:
  *   - 0: Success, acceptance criteria met
  *   - 1: Success, but below acceptance threshold
- *   - 2: Failure (config error, no snapshot found, Actor failure, etc.)
+ *   - 2: Failure (config error, Actor failure, malformed/empty snapshot, etc.)
+ *   - 3: No LTA speed-bands snapshot present yet. This is an ordering condition,
+ *        not a defect: the snapshot is produced by the separate
+ *        `tada-valhalla-traffic` Python cron, which may not have run against a
+ *        freshly-provisioned EFS. The tile pipeline treats this as non-fatal so
+ *        tiles still go live; geometry mapping is retried on the cron's next tick.
  */
 object GeometryMappingJob {
 
@@ -48,6 +53,9 @@ object GeometryMappingJob {
     private const val DEFAULT_CACHE_PATH = "data/geometry_mapping.json"
     private const val DEFAULT_TEXT_REPORT_PATH = "data/geometry_mapping_report.txt"
     private const val DEFAULT_JSON_REPORT_PATH = "data/geometry_mapping_report.json"
+
+    /** Exit code signalling "no snapshot available yet" — benign ordering, not a defect. */
+    const val EXIT_NO_SNAPSHOT = 3
 
     /** Geometry mapping doesn't need fresh speeds — segments don't move minute-to-minute.
      *  But warn loudly if the LTA cron appears stalled. */
@@ -78,11 +86,13 @@ object GeometryMappingJob {
         val speedBands = try {
             loadLatestSpeedBandsSnapshot(snapshotsDir)
         } catch (e: NoSuchFileException) {
-            logger.error(
-                "No LTA speed-bands snapshot found at {}. Has the LTA fetch cron (tada-valhalla-traffic) run yet?",
-                snapshotsDir
+            logger.warn(
+                "No LTA speed-bands snapshot found at {}. Has the LTA fetch cron (tada-valhalla-traffic) run yet? " +
+                    "Skipping geometry mapping (exit {}) — it will run once the cron produces a snapshot.",
+                snapshotsDir,
+                EXIT_NO_SNAPSHOT
             )
-            return 2
+            return EXIT_NO_SNAPSHOT
         } catch (e: Exception) {
             logger.error("Failed to load speed-bands snapshot from {}: {}", snapshotsDir, e.message, e)
             return 2

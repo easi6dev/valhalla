@@ -978,7 +978,8 @@ phase_swap_latest() {
 # (tile_id, edge_index) pairs at runtime. Job exit semantics:
 #   0 → mapping succeeded; pipeline continues
 #   1 → mapping below acceptance threshold; pipeline warns and continues
-#   2 → mapping failed (config error, no snapshot, Actor failure); pipeline fails
+#   2 → mapping failed (config error, Actor failure, malformed snapshot); pipeline fails
+#   3 → no LTA snapshot yet (cron hasn't produced one); pipeline warns and continues
 # ---------------------------------------------------------------------------
 geometry_mapping() {
     set_phase "Geometry Mapping"
@@ -1038,6 +1039,7 @@ geometry_mapping() {
     case "${job_exit_code}" in
         0) log_ok "Geometry mapping completed (acceptance criteria met)" ;;
         1) log_warn "Geometry mapping below acceptance threshold (job exit 1) — pipeline continues" ;;
+        3) log_warn "No LTA speed-bands snapshot yet (job exit 3) — geometry mapping skipped; the tada-valhalla-traffic cron will produce it. Pipeline continues" ;;
         *) log_error "Geometry mapping failed (job exit ${job_exit_code})"; return 2 ;;
     esac
 
