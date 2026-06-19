@@ -1084,6 +1084,15 @@ phase_efs_sync() {
 
     mkdir -p "${efs_region_dir}"
 
+    # Reclaim orphaned staging dirs from a crashed prior run (pod killed after
+    # cp started but before the promote). These would otherwise linger and skew
+    # the retention count below. Safe: a *.partial is never a published version.
+    local orphan
+    while IFS= read -r -d '' orphan; do
+        log_warn "Removing orphaned EFS staging dir from a prior run: $(basename "${orphan}")"
+        rm -rf "${orphan}"
+    done < <(find "${efs_region_dir}" -maxdepth 1 -type d -name "v*.partial" -print0)
+
     log_info "Copying tiles to EFS: ${efs_versioned_dir}"
     local start_epoch
     start_epoch="$(date +%s)"
@@ -1096,7 +1105,24 @@ phase_efs_sync() {
         rm -rf "${efs_partial_dir}"
         return 5
     fi
-    mv -T "${efs_partial_dir}" "${efs_versioned_dir}"
+
+    # Promote .partial → final. The destination may already exist: this run
+    # could be a re-run/retry with the same RUN_ID tag, or a --skip-build pass
+    # that reuses an existing 'latest' tag. A bare `mv -T` onto a populated dir
+    # fails ("File exists"), which is what made this phase non-idempotent.
+    #
+    # The version tag is content-addressing by convention: the same v<TAG> is
+    # the same tiles from the same build. So if the dir already exists, the tiles
+    # are already published — we just discard the redundant fresh copy and fall
+    # through to (re)assert the 'latest' symlink. This is idempotent and, crucially,
+    # never renames the live 'v<TAG>' dir, so 'latest' can't dangle for the
+    # traffic cron mid-swap.
+    if [[ -e "${efs_versioned_dir}" ]]; then
+        log_info "EFS version dir already exists — tiles already published; reusing: ${efs_versioned_dir}"
+        rm -rf "${efs_partial_dir}"
+    else
+        mv -T "${efs_partial_dir}" "${efs_versioned_dir}"
+    fi
 
     local elapsed=$(( $(date +%s) - start_epoch ))
     local size
@@ -1125,9 +1151,12 @@ phase_efs_sync() {
     log_ok "EFS latest symlink updated: ${efs_latest_link} → v${VERSION_TAG}"
 
     # Prune old EFS versions — keep last N. Same retention as local cleanup.
+    # Match only published version dirs (v<digits>...), excluding transient
+    # staging dirs like v<TAG>.partial so they never inflate the count and evict
+    # a real version early.
     local versions
     mapfile -t versions < <(
-        find "${efs_region_dir}" -maxdepth 1 -type d -name "v[0-9]*" \
+        find "${efs_region_dir}" -maxdepth 1 -type d -name "v[0-9]*" ! -name "*.partial" \
         | sort
     )
     local total=${#versions[@]}
@@ -1300,7 +1329,11 @@ main() {
             exit 1
         fi
         VERSIONED_TILE_DIR="$(readlink -f "${existing_latest}")"
+        # Dirs are named v<RUN_ID>; VERSION_TAG is the bare RUN_ID (consumers add
+        # the 'v'). Strip the leading 'v' so --skip-build doesn't yield 'vv<tag>'
+        # in S3 keys, symlink targets, and EFS paths.
         VERSION_TAG="$(basename "${VERSIONED_TILE_DIR}")"
+        VERSION_TAG="${VERSION_TAG#v}"
         log_info "Skipping build — using existing tiles: ${VERSIONED_TILE_DIR}"
     else
         phase_osm
