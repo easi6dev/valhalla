@@ -1109,6 +1109,7 @@ geometry_mapping() {
     case "${job_exit_code}" in
         0) log_ok "Geometry mapping completed (acceptance criteria met)" ;;
         1) log_warn "Geometry mapping below acceptance threshold (job exit 1) — pipeline continues" ;;
+        3) log_warn "No LTA speed-bands snapshot yet (job exit 3) — geometry mapping skipped; the tada-valhalla-traffic cron will produce it. Pipeline continues" ;;
         *) log_error "Geometry mapping failed (job exit ${job_exit_code})"; return 2 ;;
     esac
 
