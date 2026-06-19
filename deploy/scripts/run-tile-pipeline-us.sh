@@ -46,7 +46,7 @@
 #   (a) a single region with "tile_dir" + "osm_source", or
 #   (b) a member region with "tile_group", plus a .tile_groups.<group> entry
 #       carrying "tile_dir" + "osm_sources[]" + "osm_file".
-# Then run:  VALHALLA_ENV=prod-us ./run-tile-pipeline-us.sh <new_region>
+# Then run:  VALHALLA_ENV=prod-virginia ./run-tile-pipeline-us.sh <new_region>
 # (Optionally add config/regions/<region>/valhalla-<region>.json for a custom
 #  build template; otherwise the group/any template is used as a fallback.)
 #
@@ -69,7 +69,7 @@
 #   -h, --help                Show this help
 #
 # Environment:
-#   VALHALLA_ENV              local | dev | test | stage-us | prod-us (default: local)
+#   VALHALLA_ENV              local | dev | test | stage-virginia | prod-virginia (default: local)
 #   VALHALLA_PIPELINE_CONFIG  Override pipeline config file path
 #
 # Exit codes:
@@ -167,7 +167,7 @@ _reject_unsafe_docker_image() {
     fi
 
     # Bare ECR env tag with no -latest / -<sha> suffix → not CI-maintained.
-    if [[ "${image}" =~ /valhalla:(development|production|staging|test|prod-us|stage-us)$ ]]; then
+    if [[ "${image}" =~ /valhalla:(development|production|staging|test|prod-virginia|stage-virginia)$ ]]; then
         local bare_tag="${image##*:}"
         log_error "VALHALLA_DOCKER_IMAGE uses the BARE tag '${bare_tag}' (${image})."
         log_error "build-valhalla-image.yml only publishes '<branch>-latest' and '<branch>-<sha>'. A bare tag is orphaned/manual and may point at a DIFFERENT commit than the published JAR → SIGBUS in AutoCost::Allowed."
@@ -1307,8 +1307,8 @@ Options:
 
 Environments (VALHALLA_ENV):
   local      pipeline.local.conf  + binary/Docker (no S3)
-  stage-us   pipeline.stage-us.conf + Docker + US S3
-  prod-us    pipeline.prod-us.conf  + Docker + US S3 + elevation
+  stage-virginia   pipeline.stage-virginia.conf + Docker + US S3
+  prod-virginia    pipeline.prod-virginia.conf  + Docker + US S3 + elevation
 
 Examples:
   # Grouped region — build the tri-state group via any member region key
@@ -1317,17 +1317,17 @@ Examples:
   # Single region — Singapore-style, tiles under its own tile_dir
   ./run-tile-pipeline-us.sh florida --no-elevation      # → tiles under florida/
 
-  # Production US — uses pipeline.prod-us.conf automatically
-  VALHALLA_ENV=prod-us ./run-tile-pipeline-us.sh new_york
+  # Production US — uses pipeline.prod-virginia.conf automatically
+  VALHALLA_ENV=prod-virginia ./run-tile-pipeline-us.sh new_york
 
   # Staging US with elevation forced on (staging conf skips it by default)
-  VALHALLA_ENV=stage-us ./run-tile-pipeline-us.sh new_york --with-elevation
+  VALHALLA_ENV=stage-virginia ./run-tile-pipeline-us.sh new_york --with-elevation
 
   # Dry-run (verify a newly-added region resolves correctly before a real build)
-  VALHALLA_ENV=prod-us ./run-tile-pipeline-us.sh new_york --dry-run
+  VALHALLA_ENV=prod-virginia ./run-tile-pipeline-us.sh new_york --dry-run
 
   # Cron (every Tuesday 07:00 UTC = 02:00 US Eastern wall-ish):
-  # 0 7 * * 1 cd /opt/valhalla && VALHALLA_ENV=prod-us ./deploy/scripts/run-tile-pipeline-us.sh new_york >> /var/log/valhalla/cron-us.log 2>&1
+  # 0 7 * * 1 cd /opt/valhalla && VALHALLA_ENV=prod-virginia ./deploy/scripts/run-tile-pipeline-us.sh new_york >> /var/log/valhalla/cron-us.log 2>&1
 
 EOF
 }
