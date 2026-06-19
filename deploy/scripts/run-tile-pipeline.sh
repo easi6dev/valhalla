@@ -816,87 +816,6 @@ phase_validate() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 4.5: Tar Extract — pack tiles into tiles.tar for mmap (tile_extract)
-# ---------------------------------------------------------------------------
-# Creates tiles.tar alongside the existing 0/,1/,2/ directories so Valhalla
-# can load tiles via MAP_SHARED mmap. With tile_extract configured alongside
-# tile_dir, the OS shares physical pages across all Actor pool instances —
-# pool memory cost becomes ~1× tile data instead of N× (one per Actor).
-# tile_dir remains in the config as a fallback if the tar is absent.
-# ---------------------------------------------------------------------------
-phase_tar_extract() {
-    set_phase "Phase 4.5: Tar Extract"
-
-    local tar_path="${VERSIONED_TILE_DIR}/tiles.tar"
-
-    if [[ "${DRY_RUN}" == true ]]; then
-        log_dry "Would build tar extract: ${tar_path}"
-        return 0
-    fi
-
-    # In --skip-build mode VERSIONED_TILE_DIR points to the live 'latest' directory.
-    # Overwriting tiles.tar there would truncate a file that running Valhalla actors
-    # may have mmap'd (MAP_SHARED). Skip if the tar already exists; delete it first
-    # if you explicitly want to rebuild.
-    if [[ "${SKIP_BUILD}" == true ]] && [[ -s "${tar_path}" ]]; then
-        log_info "Skipping tar extract (--skip-build, tiles.tar already exists at ${tar_path})"
-        return 0
-    fi
-
-    # Prefer valhalla_build_extract — writes index.bin as the first member so
-    # Valhalla uses the fast indexed load path at startup. Without index.bin
-    # Valhalla falls back to a full tar scan (still works, but slower and
-    # prints a startup WARN).
-    local extract_config="${VALHALLA_LOG_DIR}/valhalla-extract-${REGION}-${RUN_ID}.json"
-    local extract_log="${VALHALLA_LOG_DIR}/valhalla-extract-${REGION}-${RUN_ID}.log"
-    jq -n \
-        --arg td "${VERSIONED_TILE_DIR}" \
-        --arg te "${tar_path}" \
-        '{"mjolnir":{"tile_dir":$td,"tile_extract":$te}}' > "${extract_config}"
-
-    if [[ "${USE_DOCKER}" == true ]]; then
-        # Docker path — valhalla_build_extract is always available in the image.
-        # Cannot use _run_docker_command here because it unconditionally appends
-        # the OSM .pbf positional which valhalla_build_extract does not accept.
-        log_info "Building tile extract with index (Docker: valhalla_build_extract)..."
-        local config_dir
-        config_dir="$(dirname "${extract_config}")"
-        local docker_config="${config_dir}/valhalla-docker-extract-${RUN_ID}.json"
-        sed \
-            -e "s|${VERSIONED_TILE_DIR}|/valhalla/tiles|g" \
-            "${extract_config}" > "${docker_config}"
-        docker run --rm \
-            -v "${VERSIONED_TILE_DIR}:/valhalla/tiles" \
-            -v "${config_dir}:/valhalla/config" \
-            "${VALHALLA_DOCKER_IMAGE}" \
-            valhalla_build_extract \
-            -c "/valhalla/config/$(basename "${docker_config}")" \
-            --overwrite \
-            2>&1 | tee -a "${extract_log}" | _log_stream "valhalla_build_extract"
-        rm -f "${docker_config}"
-    elif command -v valhalla_build_extract &>/dev/null || [[ -x "${VALHALLA_BUILD_TILES_BIN%tiles}extract" ]]; then
-        local extract_bin
-        extract_bin="$(command -v valhalla_build_extract 2>/dev/null || echo "${VALHALLA_BUILD_TILES_BIN%tiles}extract")"
-        log_info "Building tile extract with index (${extract_bin})..."
-        "${extract_bin}" -c "${extract_config}" --overwrite 2>&1 | tee -a "${extract_log}"
-    else
-        # Fallback: plain tar — functional but no index.bin; Valhalla will WARN
-        # at startup about degraded performance for tile loading.
-        log_warn "valhalla_build_extract not found — falling back to plain tar (no index.bin)"
-        ( cd "${VERSIONED_TILE_DIR}" && tar cf tiles.tar 0 1 2 ) \
-            2>&1 | tee -a "${VALHALLA_LOG_DIR}/tar-extract-${REGION}-${RUN_ID}.log"
-    fi
-    rm -f "${extract_config}"
-
-    if [[ ! -s "${tar_path}" ]]; then
-        log_error "tiles.tar was not produced at ${tar_path}"
-        exit 4
-    fi
-
-    log_ok "Tile extract ready: ${tar_path} ($(du -sh "${tar_path}" | cut -f1))"
-}
-
-# ---------------------------------------------------------------------------
 # Phase 5: S3 Sync (non-local environments only)
 # ---------------------------------------------------------------------------
 phase_s3_sync() {
@@ -1341,7 +1260,6 @@ main() {
     fi
     phase_extract
     phase_validate
-    phase_tar_extract
     phase_s3_sync
     phase_swap_latest
     phase_cleanup
