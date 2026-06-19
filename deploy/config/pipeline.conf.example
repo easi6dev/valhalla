@@ -11,13 +11,13 @@
 #   4. deploy/config/pipeline.local.conf           (fallback default)
 #
 # NEVER commit pipeline.local.conf, pipeline.dev.conf, pipeline.test.conf,
-# pipeline.stage.conf, pipeline.prod.conf, pipeline.stage-us.conf, or
-# pipeline.prod-us.conf — only pipeline.conf.example is committed to git.
+# pipeline.stage.conf, pipeline.prod.conf, pipeline.stage-virginia.conf, or
+# pipeline.prod-virginia.conf — only pipeline.conf.example is committed to git.
 #
 # US CLUSTER: the US region runs on a SEPARATE server cluster with its own EFS
 # mount and S3 bucket. It uses the dedicated entrypoint
-# deploy/scripts/run-tile-pipeline-us.sh with VALHALLA_ENV=stage-us | prod-us,
-# which load pipeline.stage-us.conf / pipeline.prod-us.conf. Those US confs set
+# deploy/scripts/run-tile-pipeline-us.sh with VALHALLA_ENV=stage-virginia | prod-virginia,
+# which load pipeline.stage-virginia.conf / pipeline.prod-virginia.conf. Those US confs set
 # VALHALLA_TILE_DIR=/mnt/efs-us/..., a us-east-1 S3 bucket, S3_REGION=us-east-1,
 # and (optionally) a US ECR VALHALLA_DOCKER_IMAGE. The Singapore pipeline
 # (run-tile-pipeline.sh + pipeline.{stage,prod}.conf) is untouched by US work.

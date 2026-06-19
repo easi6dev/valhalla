@@ -129,7 +129,7 @@ _reject_unsafe_docker_image() {
     fi
 
     # Bare ECR env tag with no -latest / -<sha> suffix → not CI-maintained.
-    if [[ "${image}" =~ /valhalla:(development|production|staging|test|prod-us|stage-us)$ ]]; then
+    if [[ "${image}" =~ /valhalla:(development|production|staging|test|prod-virginia|stage-virginia)$ ]]; then
         local bare_tag="${image##*:}"
         log_error "VALHALLA_DOCKER_IMAGE uses the BARE tag '${bare_tag}' (${image})."
         log_error "build-valhalla-image.yml only publishes '<branch>-latest' and '<branch>-<sha>'. A bare tag is orphaned/manual and may point at a DIFFERENT commit than the published JAR → SIGBUS in AutoCost::Allowed."
