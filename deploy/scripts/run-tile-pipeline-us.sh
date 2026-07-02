@@ -536,6 +536,33 @@ _download_osm() {
 }
 
 # ---------------------------------------------------------------------------
+# Phase 1.5: Block Ways (stamp access=no on listed OSM way_ids before build)
+# ---------------------------------------------------------------------------
+phase_block_ways() {
+    set_phase "Phase 1.5: Block Ways"
+    local here repo_root blocklist out
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    repo_root="$(cd "${here}/../.." && pwd)"
+    blocklist="${repo_root}/config/regions/${REGION}/blocked_way_ids.txt"
+
+    if [[ ! -f "${blocklist}" ]] || ! grep -qvE '^[[:space:]]*(#.*)?$' "${blocklist}"; then
+        log_info "No blocked way_ids for '${REGION}'; skipping (${blocklist})"
+        return 0
+    fi
+
+    if ! python3 -c "import osmium" 2>/dev/null; then
+        log_error "phase_block_ways requires pyosmium (apt: python3-pyosmium); not found"
+        exit 1
+    fi
+
+    out="${OSM_FILE%.pbf}.blocked.pbf"
+    log_info "Stamping access=no on blocked way_ids from ${blocklist}"
+    python3 "${here}/apply_blocked_ways.py" --in "${OSM_FILE}" --out "${out}" --blocklist "${blocklist}"
+    mv -f "${out}" "${OSM_FILE}"
+    log_ok "Block-ways phase complete"
+}
+
+# ---------------------------------------------------------------------------
 # Phase 2 & 3: Admin Build + Tile Build (admins must precede tiles)
 # ---------------------------------------------------------------------------
 phase_build() {
@@ -1446,6 +1473,7 @@ main() {
         log_info "Skipping build — using existing tiles: ${VERSIONED_TILE_DIR}"
     else
         phase_osm
+        phase_block_ways
         phase_build
     fi
     phase_extract

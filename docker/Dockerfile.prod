@@ -219,7 +219,8 @@ RUN apt-get update && apt-get install -y \
     # Tile pipeline utilities
     # osmium-tool: required by scripts/regions/merge-osm.sh to merge the US
     # tri-state OSM extracts (run-tile-pipeline-us.sh). SG pipeline doesn't use it.
-    jq wget curl ca-certificates unzip python3 osmium-tool \
+    # python3-pyosmium: used by apply_blocked_ways.py (Phase 1.5 road blocking).
+    jq wget curl ca-certificates unzip python3 osmium-tool python3-pyosmium \
     && rm -rf /var/lib/apt/lists/*
 
 # Install AWS CLI v2 — required for S3 sync in the tile pipeline.
