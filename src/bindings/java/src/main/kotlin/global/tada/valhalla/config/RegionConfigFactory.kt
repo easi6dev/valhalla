@@ -436,7 +436,7 @@ object RegionConfigFactory {
               "max_distance_contour": 200
             },
             "trace": {
-              "max_distance": 200000.0,
+              "max_distance": 400000.0,
               "max_gps_accuracy": 100.0,
               "max_search_radius": 100.0,
               "max_shape": 16000,
