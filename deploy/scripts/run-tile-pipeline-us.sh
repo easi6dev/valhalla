@@ -1144,6 +1144,58 @@ geometry_mapping() {
 }
 
 # ---------------------------------------------------------------------------
+# EFS retention — prune old versions + sweep orphaned staging dirs
+# ---------------------------------------------------------------------------
+# Idempotent, side-effect-safe retention for the EFS group dir. Keeps the newest
+# ${KEEP_VERSIONS} published v<TAG> dirs (the tar lives INSIDE each, so pruning
+# the dir reclaims its .tar too) and removes leftover *.partial staging dirs from
+# crashed runs — each *.partial is a full-size copy that the version prune
+# deliberately ignores, so it must be reclaimed here or it leaks forever.
+#
+# Every operation here is best-effort: this function must NEVER abort the
+# pipeline. It is called (a) early in phase_efs_sync as a self-healing backstop
+# for whatever a prior run left behind, and (b) again after the new version is
+# live. Because it is the ONLY thing that reclaims EFS space, it must run even
+# when the surrounding phase later fails — hence callers invoke it guarded:
+#   _efs_prune "${dir}" || log_warn "EFS prune failed (non-fatal)"
+# and the body itself swallows per-item errors so `set -e` can't kill the run.
+# Mirrors run-tile-pipeline.sh:_efs_prune (called with the TILE_SUBDIR group dir).
+# ---------------------------------------------------------------------------
+_efs_prune() {
+    local efs_group_dir="$1"
+    [[ -d "${efs_group_dir}" ]] || return 0
+
+    # Sweep orphaned staging dirs (pod killed after cp started, before promote).
+    # Excluded from the version prune below, so they must be reclaimed here.
+    local orphan
+    while IFS= read -r -d '' orphan; do
+        log_warn "Removing orphaned EFS staging dir: $(basename "${orphan}")"
+        rm -rf "${orphan}" || log_warn "Could not remove ${orphan}"
+    done < <(find "${efs_group_dir}" -maxdepth 1 -type d -name "v*.partial" -print0 2>/dev/null)
+
+    # Prune published versions — keep newest N. RUN_ID is a zero-padded
+    # %Y%m%d-%H%M%S stamp, so lexical sort == chronological order.
+    local versions
+    mapfile -t versions < <(
+        find "${efs_group_dir}" -maxdepth 1 -type d -name "v[0-9]*" ! -name "*.partial" 2>/dev/null \
+        | sort
+    )
+    local total=${#versions[@]}
+    local to_remove=$(( total - KEEP_VERSIONS ))
+    if [[ ${to_remove} -gt 0 ]]; then
+        log_info "EFS versions: ${total} (keeping ${KEEP_VERSIONS}); removing ${to_remove} oldest"
+        local i
+        for (( i=0; i<to_remove; i++ )); do
+            log_info "Removing old EFS version: $(basename "${versions[$i]}")"
+            rm -rf "${versions[$i]}" || log_warn "Could not remove ${versions[$i]}"
+        done
+    else
+        log_info "EFS versions: ${total} (keeping ${KEEP_VERSIONS}) — nothing to prune"
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Phase 6.5: EFS Tile Sync
 # ---------------------------------------------------------------------------
 # Mirrors the just-built tiles to EFS so a future US traffic-data-builder cron
@@ -1181,14 +1233,11 @@ phase_efs_sync() {
 
     mkdir -p "${efs_group_dir}"
 
-    # Reclaim orphaned staging dirs from a crashed prior run (pod killed after
-    # cp started but before the promote). These would otherwise linger and skew
-    # the retention count below. Safe: a *.partial is never a published version.
-    local orphan
-    while IFS= read -r -d '' orphan; do
-        log_warn "Removing orphaned EFS staging dir from a prior run: $(basename "${orphan}")"
-        rm -rf "${orphan}"
-    done < <(find "${efs_group_dir}" -maxdepth 1 -type d -name "v*.partial" -print0)
+    # Self-healing backstop: reclaim whatever a prior run left behind (orphaned
+    # *.partial staging dirs AND any over-retention versions) BEFORE we add this
+    # run's copy. This runs even if a previous run died before its own prune, so
+    # EFS can't grow unbounded across failed runs. Guarded: never aborts.
+    _efs_prune "${efs_group_dir}" || log_warn "EFS pre-sync prune failed (non-fatal)"
 
     log_info "Copying tiles to EFS: ${efs_versioned_dir}"
     local start_epoch
@@ -1247,27 +1296,9 @@ phase_efs_sync() {
     ln -sfn "v${VERSION_TAG}" "${efs_latest_link}"
     log_ok "EFS latest symlink updated: ${efs_latest_link} → v${VERSION_TAG}"
 
-    # Prune old EFS versions — keep last N. Same retention as local cleanup.
-    # Match only published version dirs (v<digits>...), excluding transient
-    # staging dirs like v<TAG>.partial so they never inflate the count and evict
-    # a real version early.
-    local versions
-    mapfile -t versions < <(
-        find "${efs_group_dir}" -maxdepth 1 -type d -name "v[0-9]*" ! -name "*.partial" \
-        | sort
-    )
-    local total=${#versions[@]}
-    local to_remove=$(( total - KEEP_VERSIONS ))
-    if [[ ${to_remove} -gt 0 ]]; then
-        log_info "EFS versions: ${total} (keeping ${KEEP_VERSIONS}); removing ${to_remove} oldest"
-        for (( i=0; i<to_remove; i++ )); do
-            local old="${versions[$i]}"
-            log_info "Removing old EFS version: $(basename "${old}")"
-            rm -rf "${old}"
-        done
-    else
-        log_info "EFS versions: ${total} (keeping ${KEEP_VERSIONS}) — nothing to prune"
-    fi
+    # Prune again now that this run's version is live and counts toward retention.
+    # Guarded so a prune hiccup never fails the pipeline after tiles are published.
+    _efs_prune "${efs_group_dir}" || log_warn "EFS post-swap prune failed (non-fatal)"
 }
 
 # ---------------------------------------------------------------------------
