@@ -263,13 +263,13 @@ RUN valhalla_build_tiles  --version 2>&1 | head -1 \
 
 # Embed the tile generation pipeline scripts.
 # Copied as a WHOLE DIRECTORY (not file-by-file) so that new files — shared libs,
-# helpers, future drivers — ship automatically without a Dockerfile edit. This
+# helpers, future pipeline scripts — ship automatically without a Dockerfile edit. This
 # directory contains:
-#   run-tile-pipeline.sh          SG/APAC driver
-#   run-tile-pipeline-us.sh       US driver (NYC tri-state group)
-#   lib/tile-pipeline-common.sh   shared core, sourced by BOTH drivers
+#   run-tile-pipeline.sh          SG/APAC pipeline script
+#   run-tile-pipeline-us.sh       US pipeline script (NYC tri-state group)
+#   lib/tile-pipeline-common.sh   shared core, sourced by BOTH scripts
 #   apply_blocked_ways.py         Phase 1.5 road blocking (needs python3-pyosmium)
-# Both drivers `source ${SCRIPT_DIR}/lib/tile-pipeline-common.sh`, so omitting
+# Both scripts `source ${SCRIPT_DIR}/lib/tile-pipeline-common.sh`, so omitting
 # lib/ makes them fail at startup before their version guard can even run.
 #
 # deploy/scripts/{data,logs}/ are local dev output (a ~238MB OSM extract lives in
@@ -279,12 +279,12 @@ RUN valhalla_build_tiles  --version 2>&1 | head -1 \
 # .dockerignore patterns are ROOT-RELATIVE (unlike .gitignore), so a bare `data/`
 # matches ./data/ ONLY and would leave deploy/scripts/data/ in the context.
 #
-# Placed at /app/deploy/scripts/ so the drivers' PROJECT_ROOT resolution
+# Placed at /app/deploy/scripts/ so the scripts' PROJECT_ROOT resolution
 # (SCRIPT_DIR/../.. = /app) correctly locates /app/config/regions/ at runtime.
 # Convenience symlinks at /usr/local/bin/ make them invokable by name; the
-# drivers resolve SCRIPT_DIR via `readlink -f`, so the symlink is transparent.
+# scripts resolve SCRIPT_DIR via `readlink -f`, so the symlink is transparent.
 #
-# The US driver delegates its OSM phase to scripts/regions/merge-osm.sh, which
+# The US pipeline script delegates its OSM phase to scripts/regions/merge-osm.sh, which
 # must be present at ${PROJECT_ROOT}/scripts/regions/ and needs osmium-tool
 # (installed above). It stays a separate script from the SG pipeline so US
 # changes can never affect the Singapore production build.
@@ -298,7 +298,16 @@ RUN chmod +x /app/deploy/scripts/*.sh /app/deploy/scripts/lib/*.sh /app/scripts/
 # This exists because a missing lib/ or helper is otherwise invisible until a
 # real tile build fails at runtime, in prod. `bash -n` is parse-only (nothing
 # executes); sourcing the lib additionally proves it resolves AND exports
-# LIB_VERSION, which is what each driver's runtime version guard compares.
+# LIB_VERSION, which is what each run-tile-pipeline*.sh version guard compares.
+#
+# Deliberately a non-empty check, not an equality check against
+# EXPECTED_LIB_VERSION: both run-tile-pipeline*.sh already assert equality at
+# startup, and COPY deploy/scripts/ ships the lib and both scripts as one layer
+# from one commit — so the image cannot hold a bumped lib with a stale script
+# unless the commit itself is inconsistent. What this proves is narrower and is
+# the actual failure mode worth catching here: the lib resolves and executes far
+# enough to export anything at all, i.e. it is not missing or truncated in the
+# image.
 RUN bash -n /app/deploy/scripts/run-tile-pipeline.sh \
  && bash -n /app/deploy/scripts/run-tile-pipeline-us.sh \
  && bash -n /app/deploy/scripts/lib/tile-pipeline-common.sh \

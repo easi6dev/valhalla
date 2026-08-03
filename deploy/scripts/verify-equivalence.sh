@@ -2,10 +2,10 @@
 # =============================================================================
 # verify-equivalence.sh — prove the tile-pipeline refactor preserves behavior
 # =============================================================================
-# Captures the --dry-run transcript of both pipeline drivers and diffs it
+# Captures the --dry-run transcript of both pipeline scripts and diffs it
 # against a golden baseline, after normalizing volatile fields (timestamps,
 # RUN_IDs, run durations). Used to gate the lib/tile-pipeline-common.sh
-# extraction: a passing run proves the thin drivers emit the same ordered
+# extraction: a passing run proves the thin pipeline scripts emit the same ordered
 # phases and log lines as before.
 #
 # Usage:
@@ -21,7 +21,11 @@
 # =============================================================================
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f so a symlinked invocation resolves to the real tree, matching how
+# both pipeline scripts derive SCRIPT_DIR. Without it SCRIPT_DIR would point at
+# the symlink's directory: the scripts invoked at line 137/141 would not be found,
+# and the PROJECT_ROOT below would normalize the wrong prefix at line 120.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 OUT_DIR="${TPC_VERIFY_DIR:-/tmp/tpc-verify}"
 mkdir -p "${OUT_DIR}"
 
@@ -68,7 +72,7 @@ SANDBOX_CONF="${SANDBOX}/pipeline.sandbox.conf"
 # Derived from the active pipeline.local.conf so non-path settings (executor
 # image, S3, SKIP_ELEVATION) stay exactly as the real run would see them —
 # only the four data paths are rewritten. If that conf is absent, the four
-# lines below stand alone and the driver's own defaults apply elsewhere.
+# lines below stand alone and the pipeline script's own defaults apply elsewhere.
 _reset_sandbox() {
     rm -rf "${SANDBOX}"
     mkdir -p "${SANDBOX}/data/valhalla_tiles" \
@@ -91,11 +95,11 @@ VALHALLA_LOG_DIR=${SANDBOX}/logs
 EOF
 }
 
-# Run one driver against a freshly-reset sandbox, so runs can't observe each
+# Run one pipeline script against a freshly-reset sandbox, so runs can't observe each
 # other's output (a log file or version dir left by the previous region).
 # --help runs are passed through untouched: they exit before arg parsing gets
 # to --pipeline-config, and appending it would change what is being compared.
-_run_driver() {
+_run_entrypoint() {
     _reset_sandbox
     if [[ "$*" == *--help* ]]; then
         VALHALLA_ENV=local "$@" 2>&1 | _norm
@@ -130,15 +134,15 @@ _capture() {
     local suffix="$1"   # "golden" or "current"
     local r
     for r in "${SG_REGIONS[@]}"; do
-        _run_driver "${SCRIPT_DIR}/run-tile-pipeline.sh" "$r" --dry-run \
+        _run_entrypoint "${SCRIPT_DIR}/run-tile-pipeline.sh" "$r" --dry-run \
             > "${OUT_DIR}/sg.${r}.${suffix}.log"
     done
     for r in "${US_REGIONS[@]}"; do
-        _run_driver "${SCRIPT_DIR}/run-tile-pipeline-us.sh" "$r" --dry-run \
+        _run_entrypoint "${SCRIPT_DIR}/run-tile-pipeline-us.sh" "$r" --dry-run \
             > "${OUT_DIR}/us.${r}.${suffix}.log"
     done
-    _run_driver "${SCRIPT_DIR}/run-tile-pipeline.sh"    --help > "${OUT_DIR}/sg.help.${suffix}.log"
-    _run_driver "${SCRIPT_DIR}/run-tile-pipeline-us.sh" --help > "${OUT_DIR}/us.help.${suffix}.log"
+    _run_entrypoint "${SCRIPT_DIR}/run-tile-pipeline.sh"    --help > "${OUT_DIR}/sg.help.${suffix}.log"
+    _run_entrypoint "${SCRIPT_DIR}/run-tile-pipeline-us.sh" --help > "${OUT_DIR}/us.help.${suffix}.log"
     rm -rf "${SANDBOX}"
 }
 

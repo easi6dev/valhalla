@@ -2,11 +2,11 @@
 # =============================================================================
 # Valhalla Tile Pipeline — Shared Core Library
 # =============================================================================
-# Sourced by the per-region driver scripts (run-tile-pipeline.sh,
+# Sourced by the per-region pipeline scripts (run-tile-pipeline.sh,
 # run-tile-pipeline-us.sh). NOT executable on its own.
 #
 # This library holds every phase and helper that is common across regions. The
-# only things a driver provides are:
+# only things a pipeline script provides are:
 #   • a region CONFIG block (defaults + labels), set BEFORE run_pipeline
 #   • an ordered PHASES[] array (the execution order) and BUILD_PHASES[]
 #     (the subset skipped by --skip-build)
@@ -17,23 +17,24 @@
 #       - parse_extra_flag      (optional hook for region-only CLI flags)
 #       - any *_acquire_* / phase_block_ways helpers a region needs
 #
-# Tiles are always addressed on disk by ${TILE_SUBDIR} (a driver sets this in
+# Tiles are always addressed on disk by ${TILE_SUBDIR} (a pipeline script sets this in
 # resolve_tile_layout — for a single region it equals ${REGION}; for a grouped
 # region it is the shared group dir). The lib never hardcodes ${REGION} into a
 # tile path.
 # =============================================================================
 
 # shellcheck shell=bash
-# shellcheck disable=SC2154   # region config vars are set by the sourcing driver
+# shellcheck disable=SC2154   # region config vars are set by the sourcing script
 
 # ---------------------------------------------------------------------------
 # Idempotent source guard.
 # ---------------------------------------------------------------------------
 # Everything below declares `readonly` constants. Under `set -e`, re-sourcing
 # this file would abort the caller on the first re-assignment to a readonly var
-# ("LIB_VERSION: readonly variable"). Today each driver sources it exactly once,
-# but a future helper, a test harness, or a driver that sources another driver
-# would trip it — a failure mode with a confusing message and no obvious cause.
+# ("LIB_VERSION: readonly variable"). Today each pipeline script sources it
+# exactly once, but a future helper, a test harness, or a pipeline script that
+# sources another would trip it — a failure mode with a confusing message and no
+# obvious cause.
 # Returning early makes a second source a harmless no-op. `return` is valid here
 # because this file is only ever sourced, never executed.
 # ---------------------------------------------------------------------------
@@ -42,8 +43,8 @@ if [[ -n "${LIB_VERSION:-}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Library version — a driver asserts EXPECTED_LIB_VERSION against this so a
-# driver and a stale/mismatched lib copy can never silently run together.
+# Library version — a pipeline script asserts EXPECTED_LIB_VERSION against this so a
+# pipeline script and a stale/mismatched lib copy can never silently run together.
 # ---------------------------------------------------------------------------
 readonly LIB_VERSION="1.0.0"
 
@@ -240,12 +241,12 @@ retry() {
 # ---------------------------------------------------------------------------
 # Phase 0: Bootstrap — load config, validate deps, create run ID
 # ---------------------------------------------------------------------------
-# Region-shaped values are driven by config vars the driver sets before calling
+# Region-shaped values are driven by config vars the pipeline script sets before calling
 # run_pipeline:
 #   REGION_LABEL            e.g. "" (SG) or " (US)" — appended to "Bootstrap"
 #   LOG_PREFIX              e.g. "pipeline" (SG) or "pipeline-us" (US)
 #   DEFAULT_S3_REGION       e.g. "ap-southeast-1" (SG) or "us-east-1" (US)
-# Tile-layout resolution is delegated to the driver's resolve_tile_layout hook,
+# Tile-layout resolution is delegated to the pipeline script's resolve_tile_layout hook,
 # which must set: TILE_SUBDIR, OSM_FILE, and (if applicable) OSM_SOURCE /
 # TILE_GROUP / IS_GROUP. bootstrap then derives the versioned dirs from
 # TILE_SUBDIR.
@@ -306,7 +307,7 @@ bootstrap() {
     fi
 
     # Resolve tile layout (TILE_SUBDIR, OSM_FILE, OSM_SOURCE/TILE_GROUP/IS_GROUP).
-    # Driver-provided so grouped (US) vs single-region (SG) layouts stay isolated.
+    # Pipeline-script-provided so grouped (US) vs single-region (SG) layouts stay isolated.
     resolve_tile_layout
 
     # Tile dirs are named after the SUBDIR (group or region) — all regions in a
@@ -348,7 +349,7 @@ bootstrap() {
 #
 # AWS_PROFILE / S3_ENDPOINT_URL are honoured if set, so a cluster can point at a
 # non-default credential profile or an S3-compatible endpoint without the
-# drivers needing to know.
+# pipeline scripts needing to know.
 # ---------------------------------------------------------------------------
 _preflight_s3() {
     local env="${VALHALLA_ENV:-local}"
@@ -650,7 +651,7 @@ _log_stream() {
 # ---------------------------------------------------------------------------
 # Phase 2 & 3: Admin Build + Tile Build (admins must precede tiles)
 # ---------------------------------------------------------------------------
-# Elevation acquire is optional and region-provided: if the driver defines an
+# Elevation acquire is optional and region-provided: if the pipeline script defines an
 # _acquire_elevation function it runs after the admin build (US); otherwise it
 # is skipped (SG has no inline elevation download).
 # ---------------------------------------------------------------------------
@@ -1193,9 +1194,9 @@ phase_cleanup() {
 }
 
 # ---------------------------------------------------------------------------
-# Shared pipeline driver — the common body of both scripts' main().
-# A driver calls: run_pipeline "$@"
-# It relies on the driver having ALREADY defined (before sourcing or after):
+# Shared pipeline pipeline script — the common body of both scripts' main().
+# A pipeline script calls: run_pipeline "$@"
+# It relies on the pipeline script having ALREADY defined (before sourcing or after):
 #   • config defaults set in set_region_defaults (called here)
 #   • PHASES[] and BUILD_PHASES[] arrays (execution order + skip-build subset)
 #   • resolve_tile_layout, phase_osm, geometry_mapping (+ any region helpers)
@@ -1232,7 +1233,7 @@ run_pipeline() {
     IS_GROUP=false
     TILE_GROUP=""
     TILE_SUBDIR=""
-    # Region defaults (SKIP_GEOMETRY_MAPPING, etc.) come from the driver.
+    # Region defaults (SKIP_GEOMETRY_MAPPING, etc.) come from the pipeline script.
     if declare -F set_region_defaults >/dev/null; then
         set_region_defaults
     fi
@@ -1253,7 +1254,7 @@ run_pipeline() {
             -h|--help)                show_usage; exit 0 ;;
             *)
                 # Region-specific flags (e.g. --with-geometry-mapping) are
-                # handled by the driver's parse_extra_flag hook if present.
+                # handled by the pipeline script's parse_extra_flag hook if present.
                 if declare -F parse_extra_flag >/dev/null && parse_extra_flag "$1"; then
                     shift
                 else
@@ -1308,7 +1309,7 @@ run_pipeline() {
     fi
 
     # Resolved-state visibility + silent-disable warning are only meaningful for
-    # regions that actually acquire elevation (drivers that define
+    # regions that actually acquire elevation (pipeline scripts that define
     # _resolve_elevation_bbox). SG has no inline elevation step, so this block
     # is skipped there and its output is unchanged.
     if declare -F _resolve_elevation_bbox >/dev/null; then

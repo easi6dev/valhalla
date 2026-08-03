@@ -61,8 +61,13 @@ VALHALLA_LOG_DIR=logs
 # Build options
 # ---------------------------------------------------------------------------
 
-# Skip elevation data during tile build (true = faster builds, no height data)
-# Recommended: false for prod, true for dev/test/staging
+# Skip elevation data during tile build (true = faster builds, no height data).
+# Recommended: true for ALL environments while we serve auto/taxi only — edge grade
+# is read exclusively by bicycle/pedestrian/motorscooter costing
+# (src/sif/{bicycle,pedestrian,motorscooter}cost.cc). Skipping avoids the DEM
+# download and the 60m-per-edge resampling in valhalla_build_tiles.
+# Set to false only if shipping bike/ped/scooter routing — grade is baked into tiles
+# at build time, so re-enabling requires a full tile rebuild, not just a config change.
 SKIP_ELEVATION=true
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@
 #
 # Designed to run as a weekly cron job across all environments.
 #
-# This is a THIN DRIVER over lib/tile-pipeline-common.sh — it provides only the
+# This is a THIN PIPELINE SCRIPT over lib/tile-pipeline-common.sh — it provides only the
 # Singapore/APAC region config and the region-specific phases (plain OSM
 # download, LTA/EFS geometry mapping). The shared phase logic lives in the lib.
 #
@@ -50,7 +50,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && p
 readonly PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # ---------------------------------------------------------------------------
-# Source the shared core, asserting a matching version so a driver and a stale
+# Source the shared core, asserting a matching version so a pipeline script and a stale
 # lib copy can never silently run together.
 # ---------------------------------------------------------------------------
 readonly EXPECTED_LIB_VERSION="1.0.0"

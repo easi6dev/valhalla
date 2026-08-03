@@ -7,7 +7,7 @@
 # EFS mount and its own S3 bucket (us-east-1). Isolating the two pipelines means
 # a change for one region can never break the other's weekly production build.
 #
-# Both entrypoints are THIN DRIVERS over lib/tile-pipeline-common.sh — the
+# Both entrypoints are THIN PIPELINE SCRIPTS over lib/tile-pipeline-common.sh — the
 # shared phase logic lives in the lib; this file provides only the US region
 # config and the US-specific phases (grouped-OSM merge, block-ways, elevation
 # acquire, local-cache geometry mapping).
@@ -96,7 +96,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && p
 readonly PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # ---------------------------------------------------------------------------
-# Source the shared core, asserting a matching version so a driver and a stale
+# Source the shared core, asserting a matching version so a pipeline script and a stale
 # lib copy can never silently run together.
 # ---------------------------------------------------------------------------
 readonly EXPECTED_LIB_VERSION="1.0.0"
@@ -242,10 +242,13 @@ _acquire_group_osm() {
 # ---------------------------------------------------------------------------
 phase_block_ways() {
     set_phase "Phase 1.5: Block Ways"
-    local here repo_root blocklist out
-    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    repo_root="$(cd "${here}/../.." && pwd)"
-    blocklist="${repo_root}/config/regions/${REGION}/blocked_way_ids.txt"
+    local blocklist out
+    # Use the script-level SCRIPT_DIR/PROJECT_ROOT (defined at the top with
+    # readlink -f) rather than re-deriving from BASH_SOURCE here: BASH_SOURCE is
+    # NOT symlink-resolved, so when this pipeline script is invoked via a symlink (e.g.
+    # /usr/local/bin/run-tile-pipeline-us.sh) the local derivation yields
+    # /usr/local/bin and a repo_root of /usr — silently skipping the blocklist.
+    blocklist="${PROJECT_ROOT}/config/regions/${REGION}/blocked_way_ids.txt"
 
     if [[ ! -f "${blocklist}" ]] || ! grep -qvE '^[[:space:]]*(#.*)?$' "${blocklist}"; then
         log_info "No blocked way_ids for '${REGION}'; skipping (${blocklist})"
@@ -259,7 +262,7 @@ phase_block_ways() {
 
     out="${OSM_FILE%.pbf}.blocked.pbf"
     log_info "Stamping access=no on blocked way_ids from ${blocklist}"
-    python3 "${here}/apply_blocked_ways.py" --in "${OSM_FILE}" --out "${out}" --blocklist "${blocklist}"
+    python3 "${SCRIPT_DIR}/apply_blocked_ways.py" --in "${OSM_FILE}" --out "${out}" --blocklist "${blocklist}"
     mv -f "${out}" "${OSM_FILE}"
     log_ok "Block-ways phase complete"
 }

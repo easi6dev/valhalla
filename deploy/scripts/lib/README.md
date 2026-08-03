@@ -1,44 +1,45 @@
 # Tile Pipeline — shared core & how to add regions / clusters
 
 `lib/tile-pipeline-common.sh` holds the shared tile-generation logic. The per-cluster
-entrypoints are **thin drivers** that source it:
+entrypoints are **thin pipeline scripts** that source it:
 
 - `run-tile-pipeline.sh` — Singapore / APAC (SG)
 - `run-tile-pipeline-us.sh` — US cluster
 
 The lib owns every shared phase (OSM helpers, admin/tile build, extract, validate, S3
-sync, swap-latest, cleanup, EFS sync, retention) and the `run_pipeline` driver. A driver
-supplies only cluster config + the region-shaped functions. A fix to shared logic is made
-**once, in the lib**.
+sync, swap-latest, cleanup, EFS sync, retention) and the `run_pipeline` entry function.
+A pipeline script supplies only cluster config + the region-shaped functions. A fix to
+shared logic is made **once, in the lib**.
 
 Two orderings inside `phase_build` are load-bearing and must not be re-ordered: admins are
 built **before** tiles (they are an *input* to `valhalla_build_tiles`, not a post-step),
 and an admin-build failure is non-fatal — it warns and continues, yielding tiles without
 admin data rather than no tiles at all.
 
-Tiles are always addressed on disk by `${TILE_SUBDIR}` (never `${REGION}`): a driver's
-`resolve_tile_layout` sets it — for a single region it equals the region name, for a
-grouped region it's the shared group dir.
+Tiles are always addressed on disk by `${TILE_SUBDIR}` (never `${REGION}`): a pipeline
+script's `resolve_tile_layout` sets it — for a single region it equals the region name,
+for a grouped region it's the shared group dir.
 
 ---
 
 ## What changed in this refactor
 
-Both drivers previously carried a near-complete copy of the pipeline. Every shared fix had
-to be applied twice, and the two copies had already drifted.
+Both pipeline scripts previously carried a near-complete copy of the pipeline. Every
+shared fix had to be applied twice, and the two copies had already drifted.
 
 | | Before | After |
 |---|---|---|
-| `run-tile-pipeline.sh` (SG) | 1303 lines, full pipeline | **269** — thin driver |
-| `run-tile-pipeline-us.sh` (US) | 1522 lines, full pipeline | **508** — thin driver |
+| `run-tile-pipeline.sh` (SG) | 1303 lines, full pipeline | **269** — thin pipeline script |
+| `run-tile-pipeline-us.sh` (US) | 1522 lines, full pipeline | **508** — thin pipeline script |
 | `lib/tile-pipeline-common.sh` | — | **1366** — shared core |
 
-2825 lines of duplicated pipeline became 777 lines of driver over one shared core.
+2825 lines of duplicated pipeline became 777 lines of pipeline script over one shared
+core.
 Behavior is unchanged and *proven* unchanged — see [Verifying a change](#verifying-a-change).
 
 Alongside the extraction:
 
-- **Version guard.** The lib exports `LIB_VERSION`; each driver declares
+- **Version guard.** The lib exports `LIB_VERSION`; each pipeline script declares
   `EXPECTED_LIB_VERSION` and aborts on mismatch, so a half-deployed pair fails loudly at
   startup instead of running with a lib it wasn't written against. Bump both together.
 - **S3 preflight.** `_preflight_s3` runs in `bootstrap` and **hard-fails (exit 1)** on a
@@ -60,13 +61,20 @@ Alongside the extraction:
 ### Packaging (`docker/Dockerfile.prod`)
 
 `deploy/scripts/` is now copied as a **whole directory** rather than file-by-file, so new
-libs/helpers/drivers ship without a Dockerfile edit. Two consequences worth knowing:
+libs/helpers/pipeline scripts ship without a Dockerfile edit. Two consequences worth
+knowing:
 
-- The image build **verifies the scripts in-image**: `bash -n` on both drivers and the
-  lib, sources the lib and asserts `LIB_VERSION` is non-empty (the value each driver's
-  guard compares), `ast.parse` on `apply_blocked_ways.py`, and checks both
-  `/usr/local/bin` symlinks are executable. A missing `lib/` used to be invisible until a
-  real build failed in prod.
+- The image build **verifies the scripts in-image**: `bash -n` on both
+  `run-tile-pipeline*.sh` and the lib, sources the lib and asserts `LIB_VERSION` is
+  non-empty (the value each pipeline script's guard compares), `ast.parse` on
+  `apply_blocked_ways.py`, and checks both `/usr/local/bin` symlinks are executable. A
+  missing `lib/` used to be invisible until a real build failed in prod. The version
+  assertion is deliberately non-empty rather than an equality check against
+  `EXPECTED_LIB_VERSION`: both pipeline scripts already assert equality at startup, and
+  `COPY deploy/scripts/` ships the lib and both scripts as one layer from one commit, so
+  the image cannot hold a bumped lib with a stale script unless the commit itself is
+  inconsistent. What this proves is that the lib resolves and executes far enough to
+  export anything at all — i.e. it is not missing or truncated.
 - `.dockerignore` needs `**/data/` and `**/logs/` **in addition to** `data/` and `logs/`.
   Docker's patterns are root-relative (unlike `.gitignore`), so a bare `data/` matches
   `./data/` only and would let `deploy/scripts/data/` — a ~238MB local OSM extract — into
@@ -182,7 +190,8 @@ traffic feed is a valid state. Any other job exit is a real failure.
 ## Adding a new REGION (no new script)
 
 **You do NOT create or edit any script.** Edit `config/regions/regions.json` and run the
-driver for that cluster. The scripts are region-agnostic — the region is an argument.
+pipeline script for that cluster. The scripts are region-agnostic — the region is an
+argument.
 
 ### US-pipeline region (`run-tile-pipeline-us.sh`)
 
@@ -271,16 +280,19 @@ Notes:
   `Elevation: SKIP_ELEVATION=true (source: regions.json skip_elevation=true (tile_group nyc_tri_state))`.
 - SG (`run-tile-pipeline.sh`) has no inline elevation phase, so this key has no effect
   there. It is read via the `_resolve_region_skip_elevation` hook, which only the US
-  driver defines — a new cluster driver opts in by defining it too.
+  pipeline script defines — a new cluster pipeline script opts in by defining it
+  too.
 
 ---
 
-## Adding a new CLUSTER (new thin driver)
+## Adding a new CLUSTER (new thin pipeline script)
 
-Create a new driver **only** when the region family needs its own infrastructure — a
+Create a new pipeline script **only** when the region family needs its own
+infrastructure — a
 separate EFS mount, a separate S3 bucket / AWS region, and/or different post-build
 semantics (this is why US is separate from SG). This is an infra-level event, not a
-per-region one. The new driver is ~250–470 lines over the shared lib, not a full copy.
+per-region one. The new pipeline script is ~250–470 lines over the shared lib, not a
+full copy.
 
 ### Steps
 
@@ -324,7 +336,7 @@ per-region one. The new driver is ~250–470 lines over the shared lib, not a fu
    (Add `phase_block_ways` to both arrays if the cluster needs the block-ways step; then
    define that function too.)
 
-5. **Region-shaped functions the driver must define:**
+5. **Region-shaped functions the pipeline script must define:**
 
    | Function | Purpose | Source to copy |
    |---|---|---|
@@ -335,7 +347,7 @@ per-region one. The new driver is ~250–470 lines over the shared lib, not a fu
    | `show_usage` | help text | copy + edit |
    | `parse_extra_flag` | cluster-only CLI flags (optional) | copy if needed |
 
-   For **groups**, also copy `_acquire_group_osm` from the US driver.
+   For **groups**, also copy `_acquire_group_osm` from the US pipeline script.
 
 6. **Elevation & geometry mapping — decide per cluster:**
    - **No elevation:** simply **do not define** `_resolve_elevation_bbox` / `_acquire_elevation`.
@@ -348,7 +360,7 @@ per-region one. The new driver is ~250–470 lines over the shared lib, not a fu
      the job exits 3 and the pipeline **warns and continues** — safe for a cluster with no
      traffic feed yet.
 
-7. **End the driver with:**
+7. **End the pipeline script with:**
    ```bash
    run_pipeline "$@"
    ```
@@ -358,7 +370,7 @@ per-region one. The new driver is ~250–470 lines over the shared lib, not a fu
 ### What you do NOT touch
 The shared phases in `lib/tile-pipeline-common.sh`. A new cluster reuses them as-is; if one
 needs changing, change it in the lib (it affects all clusters) and re-verify **every**
-driver, not just the one you were working on.
+pipeline script, not just the one you were working on.
 
 ---
 
@@ -379,7 +391,8 @@ cd deploy/scripts
 ```
 
 It exercises `singapore` + `thailand` (SG single-region), `new_york` (US grouped), and
-`--help` for both drivers, then normalizes the volatile fields — timestamps, `RUN_ID`s,
+`--help` for both pipeline scripts, then normalizes the volatile fields — timestamps,
+`RUN_ID`s,
 durations, `find`'s locale-dependent quote style, and both `${PROJECT_ROOT}` and the sandbox
 path, so a baseline captured in a throwaway worktree is comparable to the working tree.
 
@@ -410,10 +423,12 @@ Two design points worth knowing before you extend it:
 
 ### Also run
 
-- `bash -n` on each driver + the lib, and `shellcheck` on all three. The image build does
+- `bash -n` on each pipeline script + the lib, and `shellcheck` on all three. The image
+  build does
   the `bash -n` pass too, but catching it locally is faster.
 - One **real** (non-dry-run) build in staging before production. A dry run verifies wiring,
   not a tile build — it never invokes the builder, so it cannot catch a builder/JAR version
   skew.
-- If you bumped `LIB_VERSION`, confirm every driver's `EXPECTED_LIB_VERSION` moved with it.
-  There are currently two drivers; missing one fails at startup, which is the intent.
+- If you bumped `LIB_VERSION`, confirm every pipeline script's `EXPECTED_LIB_VERSION`
+  moved with it. There are currently two pipeline scripts; missing one fails at startup,
+  which is the intent.
