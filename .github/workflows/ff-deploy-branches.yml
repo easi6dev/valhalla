@@ -1,0 +1,183 @@
+# ==============================================================================
+# Fast-forward deploy branches on master push
+# ==============================================================================
+# Mirrors the shared workflow used across easi6dev server repos
+# (see easi6dev/tada-server-common-source :: ff-deploy-branches.yml), adapted to
+# this repo's branch topology and workflow conventions.
+#
+# On every push to master, each deploy branch is fast-forwarded to master.
+# If the fast-forward fails, we escalate: rebase -> AI rebase-monitor -> comment
+# on the originating PR and fail the job.
+#
+# Branch list rationale:
+#   development / test / staging  -> deployable; build-valhalla-image.yml builds
+#                                    <branch>-latest for each on push
+#
+# Deliberately NOT covered here:
+#   snapshot / dist  -> these gate artifact publishing in publish-jni-jar.yml
+#                       (head_branch == 'snapshot' / startsWith 'dist') and are
+#                       advanced manually, so a release is always an explicit act.
+#
+# Keep this list in sync with the push trigger in build-valhalla-image.yml.
+# ==============================================================================
+
+name: Fast-forward deploy branches on master push
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+# Serialise runs so two rapid master merges cannot race: without this, both runs
+# fast-forward the same branch, one push loses, and the loser escalates to the
+# rebase + force-with-lease path — force-pushing a deploy branch over a benign
+# race. Never cancel in progress: a half-updated deploy branch is worse than a
+# queued run.
+concurrency:
+  group: ff-deploy-branches
+  cancel-in-progress: false
+
+jobs:
+  fast-forward:
+    name: Fast-forward ${{ matrix.branch }} to master
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    strategy:
+      # One branch failing to fast-forward must not stop the others.
+      fail-fast: false
+      matrix:
+        branch: [development, test, staging]
+
+    steps:
+      - name: Checkout ${{ matrix.branch }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
+
+      # -- 1. Happy path: plain fast-forward ------------------------------------
+      - name: Fast-forward ${{ matrix.branch }} to master
+        id: ff
+        continue-on-error: true
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          BRANCH: ${{ matrix.branch }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch origin "$BASE_BRANCH"
+          git merge --ff-only "origin/$BASE_BRANCH"
+          git push origin "$BRANCH"
+
+      # -- 2. Fallback: rebase the deploy branch onto master --------------------
+      - name: Rebase ${{ matrix.branch }} onto master
+        id: rebase
+        if: steps.ff.outcome == 'failure'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
+          BRANCH: ${{ matrix.branch }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          git checkout "$BRANCH"
+          git rebase --rebase-merges "origin/$BASE_BRANCH"
+          git push --force-with-lease origin "$BRANCH"
+
+      # -- 3. Escalate to the AI rebase-monitor ---------------------------------
+      - name: Trigger AI rebase for ${{ matrix.branch }}
+        id: ai-rebase
+        if: steps.ff.outcome == 'failure' && steps.rebase.outcome == 'failure'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ matrix.branch }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          TRIGGER_COMMIT: ${{ github.event.head_commit.id }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.ORG_SUPPORT_AGENT_CF_SERVICE_TOKEN_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.ORG_SUPPORT_AGENT_CF_SERVICE_TOKEN_SECRET }}
+        run: |
+          PR_NUMBER=""
+          PR_AUTHOR=""
+          if [ -n "$TRIGGER_COMMIT" ]; then
+            PR_NUMBER=$(gh api "repos/${REPO}/commits/${TRIGGER_COMMIT}/pulls" --jq '.[0].number // empty')
+            if [ -n "$PR_NUMBER" ]; then
+              PR_AUTHOR=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.user.login // empty')
+            fi
+          fi
+
+          curl -fsS -X POST \
+            "https://supporter-agent.mvllabs.com/api/rebase-monitor/trigger" \
+            -H "Content-Type: application/json" \
+            -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            -d "$(jq -n \
+              --arg orgRepo "$REPO" \
+              --arg branch "$BRANCH" \
+              --arg baseBranch "$BASE_BRANCH" \
+              --arg prAuthor "$PR_AUTHOR" \
+              --argjson prNumber "${PR_NUMBER:-null}" \
+              '{orgRepo: $orgRepo, branch: $branch, baseBranch: $baseBranch, prAuthor: $prAuthor, prNumber: $prNumber}'
+            )"
+
+      # -- 4. Notify the PR author and fail -------------------------------------
+      - name: Notify on failure
+        if: steps.ff.outcome == 'failure' && steps.rebase.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ matrix.branch }}
+          TRIGGER_COMMIT: ${{ github.event.head_commit.id }}
+        run: |
+          # Skip the comment if there is no trigger commit (e.g. workflow_dispatch),
+          # but still fail — the branch is genuinely out of sync.
+          if [ -z "$TRIGGER_COMMIT" ]; then
+            echo "No trigger commit found, skipping PR comment"
+            exit 1
+          fi
+
+          PR_NUMBER=$(gh api "repos/${REPO}/commits/${TRIGGER_COMMIT}/pulls" --jq '.[0].number // empty')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR found for commit ${TRIGGER_COMMIT}"
+            exit 1
+          fi
+
+          PR_AUTHOR=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.user.login // empty')
+          if [ -z "$PR_AUTHOR" ]; then
+            echo "Could not fetch PR author"
+            exit 1
+          fi
+
+          # Built with printf rather than a multi-line string: any line indented
+          # 4+ spaces to match this YAML block would render as a code block on
+          # GitHub instead of a blockquote.
+          printf -v BODY '%s\n\n%s' \
+            "@${PR_AUTHOR} Fast-forward to \`${BRANCH}\` branch failed. Please rebase manually." \
+            "> **Note:** Use **Rebase**, not Merge."
+
+          gh pr comment "$PR_NUMBER" --body "$BODY"
+          exit 1
+
+      # -- 5. Per-branch summary line -------------------------------------------
+      - name: Summary
+        if: always()
+        env:
+          BRANCH: ${{ matrix.branch }}
+          FF: ${{ steps.ff.outcome }}
+          REBASE: ${{ steps.rebase.outcome }}
+        run: |
+          if [ "$FF" = "success" ]; then
+            RESULT="✅ fast-forwarded"
+          elif [ "$REBASE" = "success" ]; then
+            RESULT="⚠️ rebased (force-pushed)"
+          else
+            RESULT="❌ failed — manual rebase required"
+          fi
+          echo "| \`${BRANCH}\` | ${RESULT} |" >> "$GITHUB_STEP_SUMMARY"
