@@ -65,10 +65,18 @@ test_requests/
 # docker
 Dockerfile
 
-# Large data/build directories not needed in Docker build context
+# Large data/build directories not needed in Docker build context.
+# NOTE: Docker .dockerignore patterns are ROOT-RELATIVE, not unanchored like
+# .gitignore — bare `data/` matches ./data/ only. The `**/` variants are
+# required to also exclude nested local-dev output such as
+# deploy/scripts/data/ (a ~238MB OSM extract) and deploy/scripts/logs/,
+# which `COPY deploy/scripts/` would otherwise bake into the runtime image.
 data/
 logs/
 output/
+**/data/
+**/logs/
+**/output/
 .git/
 # Local dev symlink (absolute path) — Docker context loader rejects it
 src/bindings/java/data/

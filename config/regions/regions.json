@@ -199,7 +199,8 @@
         "https://download.geofabrik.de/north-america/us/new-jersey-latest.osm.pbf",
         "https://download.geofabrik.de/north-america/us/connecticut-latest.osm.pbf"
       ],
-      "osm_file": "nyc_tri_state-latest.osm.pbf"
+      "osm_file": "nyc_tri_state-latest.osm.pbf",
+      "skip_elevation": true
     }
   },
   "metadata": {

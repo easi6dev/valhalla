@@ -261,23 +261,63 @@ RUN valhalla_build_tiles  --version 2>&1 | head -1 \
  && valhalla_build_elevation --help >/dev/null 2>&1 \
  && echo "✅ tile binaries verified in runtime stage"
 
-# Embed the tile generation pipeline script.
-# Placed at /app/deploy/scripts/ so that the script's PROJECT_ROOT resolution
+# Embed the tile generation pipeline scripts.
+# Copied as a WHOLE DIRECTORY (not file-by-file) so that new files — shared libs,
+# helpers, future pipeline scripts — ship automatically without a Dockerfile edit. This
+# directory contains:
+#   run-tile-pipeline.sh          SG/APAC pipeline script
+#   run-tile-pipeline-us.sh       US pipeline script (NYC tri-state group)
+#   lib/tile-pipeline-common.sh   shared core, sourced by BOTH scripts
+#   apply_blocked_ways.py         Phase 1.5 road blocking (needs python3-pyosmium)
+# Both scripts `source ${SCRIPT_DIR}/lib/tile-pipeline-common.sh`, so omitting
+# lib/ makes them fail at startup before their version guard can even run.
+#
+# deploy/scripts/{data,logs}/ are local dev output (a ~238MB OSM extract lives in
+# data/). They are excluded from the build context by .dockerignore's `**/data/`
+# and `**/logs/` patterns — so this directory-wide COPY does NOT drag them in.
+# Those `**/` entries are REQUIRED and must not be deleted as redundant: Docker
+# .dockerignore patterns are ROOT-RELATIVE (unlike .gitignore), so a bare `data/`
+# matches ./data/ ONLY and would leave deploy/scripts/data/ in the context.
+#
+# Placed at /app/deploy/scripts/ so the scripts' PROJECT_ROOT resolution
 # (SCRIPT_DIR/../.. = /app) correctly locates /app/config/regions/ at runtime.
-# A convenience symlink at /usr/local/bin/ makes it easy to invoke by name.
-COPY deploy/scripts/run-tile-pipeline.sh /app/deploy/scripts/run-tile-pipeline.sh
-RUN chmod +x /app/deploy/scripts/run-tile-pipeline.sh \
-    && ln -s /app/deploy/scripts/run-tile-pipeline.sh /usr/local/bin/run-tile-pipeline.sh
-
-# US tile pipeline (NYC tri-state group). Separate script from the SG pipeline so
-# US changes can never affect the Singapore production build. It delegates the OSM
-# phase to scripts/regions/merge-osm.sh, which must be present at
-# ${PROJECT_ROOT}/scripts/regions/ (PROJECT_ROOT = /app) and needs osmium-tool
-# (installed above).
-COPY deploy/scripts/run-tile-pipeline-us.sh /app/deploy/scripts/run-tile-pipeline-us.sh
+# Convenience symlinks at /usr/local/bin/ make them invokable by name; the
+# scripts resolve SCRIPT_DIR via `readlink -f`, so the symlink is transparent.
+#
+# The US pipeline script delegates its OSM phase to scripts/regions/merge-osm.sh, which
+# must be present at ${PROJECT_ROOT}/scripts/regions/ and needs osmium-tool
+# (installed above). It stays a separate script from the SG pipeline so US
+# changes can never affect the Singapore production build.
+COPY deploy/scripts/ /app/deploy/scripts/
 COPY scripts/regions/merge-osm.sh /app/scripts/regions/merge-osm.sh
-RUN chmod +x /app/deploy/scripts/run-tile-pipeline-us.sh /app/scripts/regions/merge-osm.sh \
+RUN chmod +x /app/deploy/scripts/*.sh /app/deploy/scripts/lib/*.sh /app/scripts/regions/merge-osm.sh \
+    && ln -s /app/deploy/scripts/run-tile-pipeline.sh    /usr/local/bin/run-tile-pipeline.sh \
     && ln -s /app/deploy/scripts/run-tile-pipeline-us.sh /usr/local/bin/run-tile-pipeline-us.sh
+
+# Verify the pipeline scripts are complete and parseable IN THE IMAGE.
+# This exists because a missing lib/ or helper is otherwise invisible until a
+# real tile build fails at runtime, in prod. `bash -n` is parse-only (nothing
+# executes); sourcing the lib additionally proves it resolves AND exports
+# LIB_VERSION, which is what each run-tile-pipeline*.sh version guard compares.
+#
+# Deliberately a non-empty check, not an equality check against
+# EXPECTED_LIB_VERSION: both run-tile-pipeline*.sh already assert equality at
+# startup, and COPY deploy/scripts/ ships the lib and both scripts as one layer
+# from one commit — so the image cannot hold a bumped lib with a stale script
+# unless the commit itself is inconsistent. What this proves is narrower and is
+# the actual failure mode worth catching here: the lib resolves and executes far
+# enough to export anything at all, i.e. it is not missing or truncated in the
+# image.
+RUN bash -n /app/deploy/scripts/run-tile-pipeline.sh \
+ && bash -n /app/deploy/scripts/run-tile-pipeline-us.sh \
+ && bash -n /app/deploy/scripts/lib/tile-pipeline-common.sh \
+ && bash -c 'source /app/deploy/scripts/lib/tile-pipeline-common.sh \
+             && [ -n "${LIB_VERSION}" ] \
+             && echo "   lib/tile-pipeline-common.sh v${LIB_VERSION}"' \
+ && python3 -c "import ast; ast.parse(open('/app/deploy/scripts/apply_blocked_ways.py').read())" \
+ && test -x /usr/local/bin/run-tile-pipeline.sh \
+ && test -x /usr/local/bin/run-tile-pipeline-us.sh \
+ && echo "✅ tile pipeline scripts verified in runtime stage"
 
 # Embed deploy configs (pipeline .conf files) so the pipeline can source them
 # without a separate mount. The script auto-detects pipeline.{env}.conf.
