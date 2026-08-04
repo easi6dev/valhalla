@@ -164,24 +164,8 @@ geometry_mapping() {
         return 0
     fi
 
-    # Resolve the JNI JAR — prefer the prod path baked into the Docker image,
-    # fall back to the local-dev gradle output.
-    local jar=""
-    if [[ -f "/app/valhalla-jni.jar" ]]; then
-        jar="/app/valhalla-jni.jar"
-    else
-        # Filter out -sources.jar and -javadoc.jar — Gradle's java{} block
-        # produces them via withSourcesJar()/withJavadocJar(); only the main
-        # JAR has the compiled classes. Mirrors docker/Dockerfile.prod.
-        jar="$(ls "${PROJECT_ROOT}/src/bindings/java/build/libs/valhalla-jni-"*.jar 2>/dev/null \
-            | grep -v sources | grep -v javadoc | head -1)"
-    fi
-
-    if [[ -z "${jar}" || ! -f "${jar}" ]]; then
-        log_error "valhalla-jni JAR not found (checked /app/valhalla-jni.jar and ${PROJECT_ROOT}/src/bindings/java/build/libs/)"
-        return 2
-    fi
-
+    local jar
+    jar="$(_resolve_jni_jar)" || return 2
     log_info "Using JAR: ${jar}"
     log_info "Tile dir:  $(readlink -f "${LATEST_LINK}")"
 
@@ -231,6 +215,7 @@ Options:
   --with-elevation          Force-include elevation data (overrides conf/env)
   --skip-build              Skip OSM download and tile build; validate existing 'latest' tiles
   --skip-geometry-mapping   Skip the geometry-mapping job after tile swap
+  --skip-route-check        Skip the sample-route validation check (Phase 4)
   --no-extract              Skip building the .tar tile extract (index.bin)
   --keep-versions <n>       Old tile versions to retain (default: 3)
   --dry-run                 Print actions without executing
