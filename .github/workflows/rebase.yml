@@ -56,7 +56,10 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.head_ref }}
           fetch-depth: 0
-          token: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
+          # Fall back to GITHUB_TOKEN if the org PAT is not granted to this repo:
+          # an empty `token:` makes actions/checkout fail with
+          # "Input required and not supplied: token".
+          token: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Rebase on base branch
         env:

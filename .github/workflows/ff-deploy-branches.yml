@@ -39,6 +39,18 @@ concurrency:
   group: ff-deploy-branches
   cancel-in-progress: false
 
+env:
+  # ORG_GITHUB_ACTION_CI_TOKEN is an org-level PAT; it must be granted to this
+  # repo under Org Settings -> Secrets -> Actions -> Repository access. If it is
+  # missing, `token:` would resolve to "" and actions/checkout fails with
+  # "Input required and not supplied: token", so fall back to GITHUB_TOKEN.
+  #
+  # Caveat of the fallback: pushes made with GITHUB_TOKEN do NOT trigger further
+  # workflows, so build-valhalla-image.yml will not fire for the fast-forwarded
+  # deploy branches. Fast-forwarding still succeeds; images must be built via
+  # workflow_dispatch until the org secret is granted.
+  CI_TOKEN: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN || secrets.GITHUB_TOKEN }}
+
 jobs:
   fast-forward:
     name: Fast-forward ${{ matrix.branch }} to master
@@ -58,7 +70,7 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
-          token: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
+          token: ${{ env.CI_TOKEN }}
 
       # -- 1. Happy path: plain fast-forward ------------------------------------
       - name: Fast-forward ${{ matrix.branch }} to master
@@ -79,7 +91,7 @@ jobs:
         if: steps.ff.outcome == 'failure'
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
+          GITHUB_TOKEN: ${{ env.CI_TOKEN }}
           BRANCH: ${{ matrix.branch }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
@@ -96,7 +108,7 @@ jobs:
         if: steps.ff.outcome == 'failure' && steps.rebase.outcome == 'failure'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
+          GH_TOKEN: ${{ env.CI_TOKEN }}
           REPO: ${{ github.repository }}
           BRANCH: ${{ matrix.branch }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
@@ -131,7 +143,7 @@ jobs:
       - name: Notify on failure
         if: steps.ff.outcome == 'failure' && steps.rebase.outcome == 'failure'
         env:
-          GH_TOKEN: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
+          GH_TOKEN: ${{ env.CI_TOKEN }}
           REPO: ${{ github.repository }}
           BRANCH: ${{ matrix.branch }}
           TRIGGER_COMMIT: ${{ github.event.head_commit.id }}
