@@ -191,9 +191,28 @@ on_exit() {
         echo "{\"ts\":\"${end_time}\",\"level\":\"SUMMARY\",\"run\":\"${RUN_ID:-unknown}\",\"region\":\"${REGION:-unknown}\",\"group\":\"${TILE_GROUP:-}\",\"status\":\"${status}\",\"exit_code\":${exit_code},\"duration\":\"${duration}\",\"phase\":\"${PHASE_REACHED:-bootstrap}\"}" >> "${LOG_FILE}"
     fi
 
+    # NOTIFY_URL is a Slack incoming-webhook URL (see argo-cd
+    # cronjob-group-valhalla-tile-pipeline*.yaml) — Slack only accepts a JSON
+    # body with a "text" field, so the message must be built as one string
+    # rather than posting the free-form run/region/status fields directly
+    # (that shape is silently rejected by Slack). Formatted as labeled
+    # *Field:* lines (mrkdwn, Slack's default for the plain text field) to
+    # match the convention used for webhook messages elsewhere in the org
+    # (see tada-corporate-service SftpFileProcessor.buildSlackMessage,
+    # tada-ride-service SlackService) rather than one flat sentence.
     if [[ -n "${NOTIFY_URL:-}" ]] && command -v curl &>/dev/null; then
+        local emoji="✅"
+        [[ "${status}" != "SUCCESS" ]] && emoji="❌"
+        local text="${emoji} *Valhalla ${PIPELINE_LABEL:-Pipeline }${status}*\n"
+        text+="*Region:* ${REGION:-unknown}\n"
+        text+="*Group:* ${TILE_GROUP:-none}\n"
+        text+="*Env:* ${VALHALLA_ENV:-unknown}\n"
+        text+="*Run:* ${RUN_ID:-unknown}\n"
+        text+="*Exit code:* ${exit_code}\n"
+        text+="*Duration:* ${duration:-unknown}\n"
+        text+="*Last phase:* ${PHASE_REACHED:-bootstrap}"
         local payload
-        payload="{\"run\":\"${RUN_ID:-unknown}\",\"region\":\"${REGION:-unknown}\",\"group\":\"${TILE_GROUP:-}\",\"env\":\"${VALHALLA_ENV:-unknown}\",\"status\":\"${status}\",\"exit_code\":${exit_code},\"duration\":\"${duration}\"}"
+        payload="{\"text\":\"${text}\"}"
         curl -s -X POST "${NOTIFY_URL}" \
             -H "Content-Type: application/json" \
             -d "${payload}" \
@@ -649,6 +668,51 @@ _log_stream() {
 }
 
 # ---------------------------------------------------------------------------
+# Resolve the JNI JAR — prefer the prod path baked into the Docker image,
+# fall back to the local-dev gradle output. Shared by geometry_mapping and
+# phase_validate's route smoke check, both of which run a Java class against
+# the JNI-bundled Actor. (geometry_mapping still hardcodes /app/lib/* directly
+# for its classpath since it's effectively prod-only; only the route smoke
+# check uses _resolve_jni_runtime_classpath's local-dev fallback.)
+# ---------------------------------------------------------------------------
+_resolve_jni_jar() {
+    if [[ -f "/app/valhalla-jni.jar" ]]; then
+        echo "/app/valhalla-jni.jar"
+        return 0
+    fi
+
+    # Filter out -sources.jar and -javadoc.jar — Gradle's java{} block
+    # produces them via withSourcesJar()/withJavadocJar(); only the main
+    # JAR has the compiled classes. Mirrors docker/Dockerfile.prod.
+    local jar
+    jar="$(ls "${PROJECT_ROOT}/src/bindings/java/build/libs/valhalla-jni-"*.jar 2>/dev/null \
+        | grep -v sources | grep -v javadoc | head -1)"
+
+    if [[ -z "${jar}" || ! -f "${jar}" ]]; then
+        log_error "valhalla-jni JAR not found (checked /app/valhalla-jni.jar and ${PROJECT_ROOT}/src/bindings/java/build/libs/)"
+        return 1
+    fi
+
+    echo "${jar}"
+}
+
+# ---------------------------------------------------------------------------
+# Resolve the classpath entry for the JAR's transitive deps (SLF4J, Kotlin
+# stdlib, org.json — the thin valhalla-jni-*.jar doesn't bundle them).
+# Prod ships them at /app/lib/ (Dockerfile.prod). Local dev has no equivalent
+# unless `./gradlew copyRuntimeDeps` was run manually into build/libs/runtime/.
+# Echoes the classpath entry, or nothing if neither is present — callers must
+# check for an empty result rather than treat "found a JAR" as "can run it".
+# ---------------------------------------------------------------------------
+_resolve_jni_runtime_classpath() {
+    if [[ -d "/app/lib" ]]; then
+        echo "/app/lib/*"
+    elif [[ -d "${PROJECT_ROOT}/src/bindings/java/build/libs/runtime" ]]; then
+        echo "${PROJECT_ROOT}/src/bindings/java/build/libs/runtime/*"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Phase 2 & 3: Admin Build + Tile Build (admins must precede tiles)
 # ---------------------------------------------------------------------------
 # Elevation acquire is optional and region-provided: if the pipeline script defines an
@@ -827,7 +891,7 @@ phase_validate() {
         log_ok "Tile directory exists"
     else
         log_error "Tile directory missing: ${VERSIONED_TILE_DIR}"
-        (( errors++ ))
+        errors=$(( errors + 1 ))
     fi
 
     local tile_count
@@ -836,7 +900,7 @@ phase_validate() {
         log_ok "Tile count: ${tile_count}"
     else
         log_error "No .gph tile files found"
-        (( errors++ ))
+        errors=$(( errors + 1 ))
     fi
 
     local tile_mb
@@ -845,7 +909,7 @@ phase_validate() {
         log_ok "Tile size: $(du -sh "${VERSIONED_TILE_DIR}" | cut -f1)"
     else
         log_error "Tiles too small: ${tile_mb} MB (expected > 10 MB)"
-        (( errors++ ))
+        errors=$(( errors + 1 ))
     fi
 
     local level_count
@@ -868,7 +932,7 @@ phase_validate() {
         log_ok "Sample tile readable: $(basename "${sample}")"
     else
         log_error "Sample tile not readable"
-        (( errors++ ))
+        errors=$(( errors + 1 ))
     fi
 
     if [[ "${BUILD_EXTRACT}" == true ]]; then
@@ -881,11 +945,54 @@ phase_validate() {
                 log_ok "Tile extract: $(du -sh "${TILE_EXTRACT}" | cut -f1) (index.bin present)"
             else
                 log_error "Tile extract missing index.bin (first member: '${first_member}')"
-                (( errors++ ))
+                errors=$(( errors + 1 ))
             fi
         else
             log_error "Tile extract missing: ${TILE_EXTRACT}"
-            (( errors++ ))
+            errors=$(( errors + 1 ))
+        fi
+    fi
+
+    # Check 8: Sample route request — the only check that proves the tiles are
+    # actually routable, not just present on disk. Must run against the
+    # VERSIONED_TILE_DIR built THIS run, before phase_swap_latest/phase_s3_sync
+    # promote it — unlike geometry_mapping, which intentionally runs after the
+    # swap, a check meant to gate promotion would be too late there.
+    if [[ "${SKIP_ROUTE_CHECK}" == true ]]; then
+        log_info "Skipping route smoke check (--skip-route-check)"
+    else
+        local jar=""
+        jar="$(_resolve_jni_jar 2>/dev/null)" || true
+        local runtime_cp=""
+        [[ -n "${jar}" ]] && runtime_cp="$(_resolve_jni_runtime_classpath)"
+
+        if [[ -z "${jar}" || -z "${runtime_cp}" ]] || ! command -v java &>/dev/null; then
+            # Local dev without a prod-style JAR + runtime deps layout (see
+            # _resolve_jni_runtime_classpath), or an image without a JRE, can't
+            # run this check at all — warn rather than fail so `VALHALLA_ENV=local`
+            # and any non-JRE tile-builder image keep working without this check
+            # blocking every run.
+            log_warn "Route smoke check skipped — java and/or valhalla-jni JAR + runtime classpath not available (expected in the prod Docker image; local dev needs ./gradlew copyRuntimeDeps)"
+        else
+            local route_check_log="${VALHALLA_LOG_DIR}/route-check-${REGION}-${RUN_ID}.log"
+            local route_check_exit=0
+            if ! java -cp "${jar}:${runtime_cp}" global.tada.valhalla.validation.RouteSmokeCheckJob \
+                "${REGION}" "${VERSIONED_TILE_DIR}" 2>&1 | tee -a "${route_check_log}" | _log_stream "ROUTE-CHECK"; then
+                route_check_exit=${PIPESTATUS[0]}
+            fi
+
+            # Exit 3 = RouteSmokeCheckJob.EXIT_NO_SAMPLE_LOCATIONS — this region has
+            # no sample coordinates configured (today: anything but singapore/
+            # new_york). Benign, not a defect — warn and continue rather than fail
+            # validation for a region this check was never meant to cover.
+            if [[ ${route_check_exit} -eq 0 ]]; then
+                log_ok "Route smoke check passed"
+            elif [[ ${route_check_exit} -eq 3 ]]; then
+                log_warn "Route smoke check skipped — no sample locations configured for region '${REGION}' (log: ${route_check_log})"
+            else
+                log_error "Route smoke check failed (exit ${route_check_exit}) — tiles cannot serve a route (log: ${route_check_log})"
+                errors=$(( errors + 1 ))
+            fi
         fi
     fi
 
@@ -1224,6 +1331,7 @@ run_pipeline() {
     OSM_MAX_AGE_DAYS=6
     DRY_RUN=false
     SKIP_BUILD=false
+    SKIP_ROUTE_CHECK=false
     BUILD_EXTRACT=true
     TILE_EXTRACT=""
     KEEP_VERSIONS_ARG=""
@@ -1247,6 +1355,7 @@ run_pipeline() {
             --with-elevation)         SKIP_ELEVATION_ARG=false;  shift   ;;
             --skip-build)             SKIP_BUILD=true;            shift   ;;
             --skip-geometry-mapping)  SKIP_GEOMETRY_MAPPING=true; shift  ;;
+            --skip-route-check)       SKIP_ROUTE_CHECK=true;      shift   ;;
             --no-extract)             BUILD_EXTRACT=false;        shift   ;;
             --keep-versions)          KEEP_VERSIONS_ARG="$2";    shift 2 ;;
             --dry-run)                DRY_RUN=true;               shift   ;;

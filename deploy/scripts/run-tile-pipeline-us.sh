@@ -70,6 +70,7 @@
 #   --skip-build              Skip OSM + tile build; operate on existing 'latest'
 #   --skip-geometry-mapping   Skip the geometry-mapping job (default: skipped for US)
 #   --with-geometry-mapping   Force-run the geometry-mapping job
+#   --skip-route-check        Skip the sample-route validation check (Phase 4)
 #   --no-extract              Skip building the .tar tile extract (index.bin)
 #   --keep-versions <n>       Old tile versions to retain (default: 3)
 #   --dry-run                 Print actions without executing
@@ -413,19 +414,8 @@ geometry_mapping() {
         return 0
     fi
 
-    local jar=""
-    if [[ -f "/app/valhalla-jni.jar" ]]; then
-        jar="/app/valhalla-jni.jar"
-    else
-        jar="$(ls "${PROJECT_ROOT}/src/bindings/java/build/libs/valhalla-jni-"*.jar 2>/dev/null \
-            | grep -v sources | grep -v javadoc | head -1)"
-    fi
-
-    if [[ -z "${jar}" || ! -f "${jar}" ]]; then
-        log_error "valhalla-jni JAR not found (checked /app/valhalla-jni.jar and ${PROJECT_ROOT}/src/bindings/java/build/libs/)"
-        return 2
-    fi
-
+    local jar
+    jar="$(_resolve_jni_jar)" || return 2
     log_info "Using JAR: ${jar}"
     log_info "Tile dir:  $(readlink -f "${LATEST_LINK}")"
 
@@ -475,6 +465,7 @@ Options:
   --skip-build              Skip OSM + tile build; operate on existing 'latest'
   --skip-geometry-mapping   Skip geometry-mapping (default for US)
   --with-geometry-mapping   Force-run geometry-mapping
+  --skip-route-check        Skip the sample-route validation check (Phase 4)
   --no-extract              Skip building the .tar tile extract (index.bin)
   --keep-versions <n>       Old tile versions to retain (default: 3)
   --dry-run                 Print actions without executing
