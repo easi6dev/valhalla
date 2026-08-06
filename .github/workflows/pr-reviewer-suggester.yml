@@ -1,0 +1,46 @@
+name: PR Reviewer Suggester
+
+# Suggests reviewer candidates by analyzing who contributed most to the
+# lines a PR changes (git blame + file history). Posts a single comment.
+# NOTE: Local trial workflow. If adopted, migrate to
+#       easi6dev/tada-server-common-source and sync to all repos.
+
+on:
+  pull_request:
+    # `opened` covers PRs created ready-for-review; `ready_for_review` covers
+    # PRs opened as draft and later marked ready (the `if` below filters drafts).
+    types: [opened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  suggest-reviewer:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Full history is required for `git blame` / `git log` analysis.
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/Iron"
+      - name: Run Reviewer Suggester Script
+        run: node ./.github/scripts/pr-reviewer-suggester.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Broader-scoped token for the org team API and the cross-repo
+          # stats-report reads (the default GITHUB_TOKEN cannot see them).
+          ORG_GITHUB_ACTION_CI_TOKEN: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
+          # Slack bot token (users:read) for the vacation filter on random picks.
+          SLACK_BOT_TOKEN: ${{ secrets.ORG_SLACK_BOT_TOKEN }}
+          GITHUB_PULL_REQUEST_NUMBER: ${{ github.event.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
