@@ -21,19 +21,9 @@ on:
 
 jobs:
   rebase:
-    # NOTE: The author_association check deviates from the
-    # tada-server-common-source original. In the private TADA repos, only org
-    # members can comment at all, so an unguarded '/rebase' is fine. This repo
-    # is a PUBLIC fork, where any GitHub user can comment on a PR — without this
-    # gate, an arbitrary internet user could trigger a force-push carried out
-    # with ORG_GITHUB_ACTION_CI_TOKEN (contents: write).
-    # Please preserve this deviation when re-syncing from the central repo.
     if: >
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '/rebase') &&
-      (github.event.comment.author_association == 'OWNER' ||
-       github.event.comment.author_association == 'MEMBER' ||
-       github.event.comment.author_association == 'COLLABORATOR')
+      contains(github.event.comment.body, '/rebase')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -56,10 +46,7 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.head_ref }}
           fetch-depth: 0
-          # Fall back to GITHUB_TOKEN if the org PAT is not granted to this repo:
-          # an empty `token:` makes actions/checkout fail with
-          # "Input required and not supplied: token".
-          token: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
 
       - name: Rebase on base branch
         env:

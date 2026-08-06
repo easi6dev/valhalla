@@ -32,27 +32,8 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-    # NOTE: This step deviates from the tada-server-common-source original.
-    # Upstream interpolates ${{ github.head_ref }} directly into the run block.
-    # That is safe in the private TADA repos (opening a PR requires org
-    # membership), but easi6dev/valhalla is a PUBLIC fork: anyone can open a PR
-    # from a branch whose name contains shell metacharacters, and the templating
-    # engine would splice it into this script before bash parses it — arbitrary
-    # code execution on the runner. Refs are passed via env: instead, where the
-    # value reaches bash as data and is never re-parsed as source.
-    # Please preserve this deviation when re-syncing from the central repo.
     - name: Check rebased
-      env:
-        HEAD_REF: ${{ github.head_ref }}
-        BASE_REF: ${{ github.base_ref }}
       run: |
-        git checkout "$HEAD_REF"
-        git checkout "$BASE_REF"
-        base_hash=$(git show-ref --heads -s "$BASE_REF")
-        pr_merge_hash=$(git merge-base "$BASE_REF" "$HEAD_REF")
-        if [ "$base_hash" = "$pr_merge_hash" ]; then
-          echo "Already rebased, merge-base commit ${base_hash}"
-        else
-          echo "Branch is not rebased onto ${BASE_REF}. Please rebase."
-          exit 1
-        fi
+        git checkout ${{ github.head_ref }}
+        git checkout ${{ github.base_ref }}
+        base_hash=$(git show-ref --heads -s ${{github.base_ref}} ) && pr_merge_hash=$(git merge-base ${{github.base_ref}} ${{github.head_ref}}) && ([ "${base_hash}" = "${pr_merge_hash}" ] && echo "Already rebased, merge-base commit  ${base_hash}" || exit 1)

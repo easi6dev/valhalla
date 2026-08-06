@@ -154,3 +154,8 @@ logs/
 
 # Local planning/working docs (not committed)
 tasks/
+docs/*/.tada-state.json
+docs/*/.tada-metrics.json
+docs/*/.tada-log.json
+docs/*/context.md
+docs/audit
