@@ -219,6 +219,34 @@ on_exit() {
             --max-time 10 \
             --retry 2 || log_warn "Webhook notification failed"
     fi
+
+    # DogStatsD event (DHL-29015) — mirrors the Slack webhook above: same
+    # choke point, same fire-and-forget tolerance for failure. Unlike the
+    # webhook, this needs no URL/credential — the org runs Datadog in socket
+    # mode (DD_DOGSTATSD_URL=unix:///var/run/datadog/dsd.socket, confirmed by
+    # infra), and the local agent forwards the event using its own identity.
+    # A Unix datagram socket can't be reached via bash's /dev/udp (that's
+    # UDP-only) or by any tool on PATH in this image (no socat/nc — see
+    # Dockerfile.tilebuilder's runtime package list); python3 IS already on
+    # PATH for valhalla_build_extract/valhalla_build_elevation, and its stdlib
+    # socket module supports AF_UNIX+SOCK_DGRAM with no extra dependency, so
+    # it's the smallest correct option here, not the general-purpose choice.
+    # The event payload is passed via env var, not interpolated into the
+    # Python source, so its content can't break out of the script.
+    if [[ -n "${DD_DOGSTATSD_URL:-}" ]]; then
+        local dd_socket_path="${DD_DOGSTATSD_URL#unix://}"
+        local alert_type="success"
+        [[ "${status}" != "SUCCESS" ]] && alert_type="error"
+        local dd_title="Valhalla ${PIPELINE_LABEL:-Pipeline }${status}"
+        local dd_text="region:${REGION:-unknown} group:${TILE_GROUP:-none} env:${VALHALLA_ENV:-unknown} run:${RUN_ID:-unknown} exit_code:${exit_code} duration:${duration:-unknown} phase:${PHASE_REACHED:-bootstrap}"
+        DD_EVENT="_e{${#dd_title},${#dd_text}}:${dd_title}|${dd_text}|t:${alert_type}|#env:${VALHALLA_ENV:-unknown},region:${REGION:-unknown},pipeline:valhalla-tile" \
+        DD_SOCKET_PATH="${dd_socket_path}" \
+        timeout 2 python3 -c '
+import os, socket
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+sock.sendto(os.environ["DD_EVENT"].encode(), os.environ["DD_SOCKET_PATH"])
+' 2>/dev/null || log_warn "Datadog event notification failed"
+    fi
 }
 
 # ---------------------------------------------------------------------------
