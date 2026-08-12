@@ -215,8 +215,8 @@
     },
     "trace": {
       "max_distance": 200000.0,
-      "max_gps_accuracy": 100.0,
-      "max_search_radius": 100.0,
+      "max_gps_accuracy": 200.0,
+      "max_search_radius": 200.0,
       "max_shape": 16000,
       "max_best_paths": 4,
       "max_best_paths_shape": 100
