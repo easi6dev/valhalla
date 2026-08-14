@@ -41,6 +41,10 @@ object RegionConfigFactory {
     const val DEFAULT_MEILI_GRID_CACHE_SIZE: Int = 100240
     /** Meili map-matching grid cell size (historical default). */
     const val DEFAULT_MEILI_GRID_SIZE: Int = 500
+    /** Meili emission GPS-noise std-dev in metres (historical default). Overridable per-region via regions.json `meili.sigma_z`. */
+    const val DEFAULT_MEILI_SIGMA_Z: Double = 4.07
+    /** Meili candidate-edge search radius in metres (historical default). Overridable per-region via regions.json `meili.search_radius`. */
+    const val DEFAULT_MEILI_SEARCH_RADIUS: Int = 50
 
     // Cache for loaded regions config
     @Volatile
@@ -280,6 +284,11 @@ object RegionConfigFactory {
         // Get costing options if present
         val costingOptions = regionConfig.optJSONObject("costing_options")
 
+        // Per-region map-matching tuning from regions.json `meili`; absent → historical defaults (byte-identical config).
+        val meiliOverrides = regionConfig.optJSONObject("meili")
+        val meiliSigmaZ = meiliOverrides?.optDouble("sigma_z", DEFAULT_MEILI_SIGMA_Z) ?: DEFAULT_MEILI_SIGMA_Z
+        val meiliSearchRadius = meiliOverrides?.optInt("search_radius", DEFAULT_MEILI_SEARCH_RADIUS) ?: DEFAULT_MEILI_SEARCH_RADIUS
+
         // Performance knobs are injected (Phase 2). Defaults equal the historical
         // hardcoded values, so callers that don't pass them get identical config.
         // The previous region-specific (nyc_tri_state) auto-override was removed in
@@ -366,21 +375,21 @@ object RegionConfigFactory {
             "mode": "auto",
             "customizable": ["mode", "search_radius", "turn_penalty_factor", "gps_accuracy", "interpolation_distance", "sigma_z", "beta", "max_route_distance_factor", "max_route_time_factor"],
             "default": {
-              "sigma_z": 4.07,
+              "sigma_z": $meiliSigmaZ,
               "gps_accuracy": 5.0,
               "beta": 3,
               "max_route_distance_factor": 5,
               "max_route_time_factor": 5,
               "breakage_distance": 2000,
               "interpolation_distance": 10,
-              "search_radius": 50,
+              "search_radius": $meiliSearchRadius,
               "geometry": false,
               "route": true,
               "turn_penalty_factor": 200
             },
             "auto": {
               "turn_penalty_factor": 200,
-              "search_radius": 50
+              "search_radius": $meiliSearchRadius
             },
             "pedestrian": {
               "turn_penalty_factor": 100,
