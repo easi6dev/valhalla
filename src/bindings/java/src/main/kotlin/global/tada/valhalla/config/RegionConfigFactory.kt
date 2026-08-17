@@ -47,6 +47,8 @@ object RegionConfigFactory {
     const val DEFAULT_MEILI_SEARCH_RADIUS: Int = 50
     /** Meili transition route/gc mismatch penalty (historical default). Overridable per-region via regions.json `meili.beta`. */
     const val DEFAULT_MEILI_BETA: Int = 3
+    /** Meili turn penalty factor (historical default). Overridable per-region via regions.json `meili.turn_penalty_factor`. */
+    const val DEFAULT_MEILI_TURN_PENALTY_FACTOR: Int = 200
 
     // Cache for loaded regions config
     @Volatile
@@ -291,6 +293,7 @@ object RegionConfigFactory {
         val meiliSigmaZ = meiliOverrides?.optDouble("sigma_z", DEFAULT_MEILI_SIGMA_Z) ?: DEFAULT_MEILI_SIGMA_Z
         val meiliSearchRadius = meiliOverrides?.optInt("search_radius", DEFAULT_MEILI_SEARCH_RADIUS) ?: DEFAULT_MEILI_SEARCH_RADIUS
         val meiliBeta = meiliOverrides?.optInt("beta", DEFAULT_MEILI_BETA) ?: DEFAULT_MEILI_BETA
+        val meiliTurnPenalty = meiliOverrides?.optInt("turn_penalty_factor", DEFAULT_MEILI_TURN_PENALTY_FACTOR) ?: DEFAULT_MEILI_TURN_PENALTY_FACTOR
 
         // Performance knobs are injected (Phase 2). Defaults equal the historical
         // hardcoded values, so callers that don't pass them get identical config.
@@ -388,7 +391,7 @@ object RegionConfigFactory {
               "search_radius": $meiliSearchRadius,
               "geometry": false,
               "route": true,
-              "turn_penalty_factor": 200
+              "turn_penalty_factor": $meiliTurnPenalty
             },
             "auto": {
               "turn_penalty_factor": 200,
