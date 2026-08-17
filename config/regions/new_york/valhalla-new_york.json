@@ -93,6 +93,7 @@
       "max_route_time_factor"
     ],
     "default": {
+      "_comment": "NY: sigma_z 4.07->20 & search_radius 50->100 — GPS multipaths off-road under elevated tracks; tight defaults snapped to wrong roads -> phantom toll gantries (DHL-29657).",
       "sigma_z": 20,
       "gps_accuracy": 5.0,
       "beta": 3,
