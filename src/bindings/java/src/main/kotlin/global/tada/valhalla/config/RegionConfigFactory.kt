@@ -45,6 +45,8 @@ object RegionConfigFactory {
     const val DEFAULT_MEILI_SIGMA_Z: Double = 4.07
     /** Meili candidate-edge search radius in metres (historical default). Overridable per-region via regions.json `meili.search_radius`. */
     const val DEFAULT_MEILI_SEARCH_RADIUS: Int = 50
+    /** Meili transition route/gc mismatch penalty (historical default). Overridable per-region via regions.json `meili.beta`. */
+    const val DEFAULT_MEILI_BETA: Int = 3
 
     // Cache for loaded regions config
     @Volatile
@@ -288,6 +290,7 @@ object RegionConfigFactory {
         val meiliOverrides = regionConfig.optJSONObject("meili")
         val meiliSigmaZ = meiliOverrides?.optDouble("sigma_z", DEFAULT_MEILI_SIGMA_Z) ?: DEFAULT_MEILI_SIGMA_Z
         val meiliSearchRadius = meiliOverrides?.optInt("search_radius", DEFAULT_MEILI_SEARCH_RADIUS) ?: DEFAULT_MEILI_SEARCH_RADIUS
+        val meiliBeta = meiliOverrides?.optInt("beta", DEFAULT_MEILI_BETA) ?: DEFAULT_MEILI_BETA
 
         // Performance knobs are injected (Phase 2). Defaults equal the historical
         // hardcoded values, so callers that don't pass them get identical config.
@@ -377,7 +380,7 @@ object RegionConfigFactory {
             "default": {
               "sigma_z": $meiliSigmaZ,
               "gps_accuracy": 5.0,
-              "beta": 3,
+              "beta": $meiliBeta,
               "max_route_distance_factor": 5,
               "max_route_time_factor": 5,
               "breakage_distance": 2000,
