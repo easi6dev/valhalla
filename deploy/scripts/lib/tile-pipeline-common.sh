@@ -239,7 +239,7 @@ on_exit() {
         [[ "${status}" != "SUCCESS" ]] && alert_type="error"
         local dd_title="Valhalla ${PIPELINE_LABEL:-Pipeline }${status}"
         local dd_text="region:${REGION:-unknown} group:${TILE_GROUP:-none} env:${VALHALLA_ENV:-unknown} run:${RUN_ID:-unknown} exit_code:${exit_code} duration:${duration:-unknown} phase:${PHASE_REACHED:-bootstrap}"
-        DD_EVENT="_e{${#dd_title},${#dd_text}}:${dd_title}|${dd_text}|t:${alert_type}|#env:${VALHALLA_ENV:-unknown},region:${REGION:-unknown},pipeline:valhalla-tile" \
+        DD_EVENT="_e{${#dd_title},${#dd_text}}:${dd_title}|${dd_text}|t:${alert_type}|#env:${VALHALLA_ENV:-unknown},tile_region:${REGION:-unknown},pipeline:valhalla-tile" \
         DD_SOCKET_PATH="${dd_socket_path}" \
         timeout 2 python3 -c '
 import os, socket
