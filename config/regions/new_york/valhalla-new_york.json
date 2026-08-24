@@ -93,21 +93,22 @@
       "max_route_time_factor"
     ],
     "default": {
-      "sigma_z": 4.07,
+      "_comment": "NY: sigma_z 4.07->20 & search_radius 50->100 — GPS multipaths off-road under elevated tracks; tight defaults snapped to wrong roads -> phantom toll gantries (DHL-29657).",
+      "sigma_z": 20,
       "gps_accuracy": 5.0,
       "beta": 3,
       "max_route_distance_factor": 5,
       "max_route_time_factor": 5,
       "breakage_distance": 2000,
       "interpolation_distance": 10,
-      "search_radius": 50,
+      "search_radius": 100,
       "geometry": false,
       "route": true,
       "turn_penalty_factor": 200
     },
     "auto": {
       "turn_penalty_factor": 200,
-      "search_radius": 50
+      "search_radius": 100
     },
     "pedestrian": {
       "turn_penalty_factor": 100,
@@ -215,8 +216,8 @@
     },
     "trace": {
       "max_distance": 200000.0,
-      "max_gps_accuracy": 100.0,
-      "max_search_radius": 100.0,
+      "max_gps_accuracy": 200.0,
+      "max_search_radius": 200.0,
       "max_shape": 16000,
       "max_best_paths": 4,
       "max_best_paths_shape": 100

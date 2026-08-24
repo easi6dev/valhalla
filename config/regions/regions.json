@@ -109,7 +109,11 @@
       },
       "timezone": "America/New_York",
       "locale": "en-US",
-      "currency": "USD"
+      "currency": "USD",
+      "meili": {
+        "sigma_z": 20,
+        "search_radius": 100
+      }
     },
     "new_jersey": {
       "name": "New Jersey",
