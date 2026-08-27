@@ -90,7 +90,20 @@ Only suggest KDoc for **new or modified** public APIs — do not comment on unch
 
 <output>
 ## Output
-- Use inline comments on specific lines (with H/M/L prefix)
+- Use inline comments on specific lines, formatted as `{H/M/L}) {description}`.
+- For findings that need more explanation — rationale, code trace, or an accompanying `suggestion` block — lead the description with a one-sentence `TL;DR: {headline}`, then add the full explanation as a separate paragraph below it. Short, self-contained findings should just state the description directly — do NOT tack on a `TL;DR:` label when there's nothing longer following it.
+
+  Example (long finding — needs TL;DR):
+  ```
+  H) TL;DR: Dependency injected as a method parameter instead of via constructor.
+
+  `MyController.endpoint(myUc: MyUseCase)` takes `MyUseCase` as a method parameter. Spring will not resolve this at request time and it will throw at runtime — dependencies must be constructor-injected so Spring can wire them at bean creation.
+  ```
+
+  Example (short finding — no TL;DR needed):
+  ```
+  L) Use `val` instead of `var` here — the value is never reassigned.
+  ```
 - Use GitHub suggested changes format (````suggestion`) for KDoc additions and simple fixes
 
 ### Summary Comment Format
@@ -119,7 +132,8 @@ Bad example (do NOT do this):
 
 ## Pre-Submission Verification
 Before posting your review, verify:
-- [ ] Every comment uses the H/M/L prefix
+- [ ] Every comment uses the format `{H/M/L}) {description}`
+- [ ] Longer findings lead with `TL;DR: {headline}` followed by a full explanation paragraph; short findings state the description directly with no redundant `TL;DR:` label
 - [ ] No comments about out-of-scope areas (bug correctness, feature behavior, refactoring equivalence, SQL migrations)
 - [ ] Summary starts with `# Pull Request Review Summary`
 - [ ] Summary contains ONLY counts and recommendation — no individual issue descriptions
@@ -129,7 +143,7 @@ Before posting your review, verify:
 
 ## Critical Rules Reminder
 - You review ONLY code quality and conventions — NOT bug correctness, feature behavior, refactoring equivalence, or SQL migrations
-- Every comment uses H/M/L prefix
+- Every comment uses the `{H/M/L}) {description}` format; longer findings lead with `TL;DR: {headline}` before the full explanation
 - Summary starts with `# Pull Request Review Summary` — counts and recommendation only, no individual issue descriptions
 - Use SLF4J placeholders (`"{}", var`), NOT string interpolation (`"$var"`)
 

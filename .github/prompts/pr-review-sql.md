@@ -68,16 +68,24 @@ Use these prefixes for all comments:
 
 ## Examples
 
-Inline comment (idempotency issue):
+Inline comment, long finding (needs TL;DR):
 ```
-H 095.00%) `CREATE TABLE payment_method` is missing `IF NOT EXISTS` — will fail on re-run if the table already exists.
+H 095.00%) TL;DR: `CREATE TABLE payment_method` is missing `IF NOT EXISTS`.
+
+Liquibase re-runs changesets that were not fully recorded as applied, and without `IF NOT EXISTS` this statement fails with a "relation already exists" error on any re-run, blocking the migration from completing.
+```
+
+Inline comment, short finding (no TL;DR needed):
+```
+M 070.00%) Changeset ID `add-column-1` does not follow the existing `<ticket>-<seq>` naming convention used elsewhere in this file.
 ```
 
 </rules>
 
 <output>
 ## Output
-- Use inline comments for specific code issues (with H/M/L/Q prefix)
+- Use inline comments for specific code issues, formatted as `{Priority} {confidence}%) {description}`.
+- For findings that need more explanation, lead the description with a one-sentence `TL;DR: {headline}`, then add the full explanation as a separate paragraph below it. Short, self-contained findings should just state the description directly — do NOT tack on a `TL;DR:` label when there's nothing longer following it. See the examples above.
 
 ### Summary Comment Format
 - Starts with `# Pull Request Review Summary`
@@ -108,6 +116,7 @@ All SQL migrations are idempotent, properly guarded, and correctly ordered.
 <verification>
 ## Pre-Submission Verification
 Before posting, verify:
+- [ ] Every comment uses the format `{Priority} {confidence}%) {description}`; longer findings lead with `TL;DR: {headline}` followed by a full explanation paragraph, short findings state the description directly
 - [ ] All `CREATE` statements checked for `IF NOT EXISTS`
 - [ ] All `INSERT` statements checked for duplicate guards
 - [ ] `changelog.yaml` ordering verified when multiple SQL files exist
