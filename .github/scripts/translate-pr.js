@@ -13,6 +13,9 @@
 //   [TRANSLATING marker]   → leftover from a cancelled run; gets cleaned up
 //                            and retried automatically on next event
 //
+// Content too short to be worth translating ("LGTM", "확인했습니다") is skipped
+// without any write — no marker, no LLM call. See isTooShortToTranslate.
+//
 // On translation failure: the original body is restored and the failure
 // is logged via core.warning + core.summary (NOT written to the PR body).
 //
@@ -27,6 +30,10 @@ const CONFIG = {
   TIMEOUT_MS: 90000,
   MAX_TOKENS: 8192,
   MAX_INPUT_CHARS: 16000,
+  // Minimum letter count (after meaningfulText cleaning) for an item to be
+  // worth translating. See isTooShortToTranslate for why the two differ.
+  MIN_LETTERS_DEFAULT: 20,
+  MIN_LETTERS_HANGUL: 8,
   RETRY_COUNT: 1,
   RETRY_DELAY_MS: 2000,
   PER_PAGE: 100,
@@ -38,9 +45,10 @@ const MARKERS = {
   TRANSLATING: "<!-- translation-in-progress -->",
 };
 
-// Logins excluded from translation entirely (checked by prefix, since the
-// default GITHUB_TOKEN posts as "github-actions[bot]").
-const EXCLUDED_AUTHOR_PREFIXES = ["github-actions"];
+// Bot logins excluded from translation entirely. Matched by prefix so the
+// "[bot]" suffix GitHub appends to app identities is absorbed
+// (e.g. "aws-security-agent[bot]").
+const EXCLUDED_AUTHOR_PREFIXES = ["aws-security-agent"];
 
 function isExcludedAuthor(login) {
   if (!login) return false;
@@ -255,6 +263,41 @@ function stripArtifacts(body) {
     .trim();
 }
 
+// Drops everything a translator has no use for — HTML comments, images,
+// media/markup tags, @mentions, URLs, emoji — leaving the prose a human would
+// actually read. Shared by needsTranslation (is there any prose?) and
+// isTooShortToTranslate (is there enough of it?).
+function meaningfulText(body) {
+  return body
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/<(img|video|source|picture)\b[^>]*>/gi, "")
+    .replace(/<\/?[a-z][^>]*>/gi, "")
+    .replace(/@[\w-]+/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}️‍]/gu, "");
+}
+
+// Short acknowledgements ("LGTM", "확인했습니다") read fine as they stand;
+// translating them only buries them under a translation block. The two
+// thresholds differ because a wrong skip does not cost the same in both
+// directions. English text typically ends up with its Korean tucked into a
+// collapsed <details> below the original, so skipping it merely withholds a
+// convenience; Korean text typically has its translation promoted ABOVE the
+// original, so skipping it leaves non-Korean readers with something they
+// cannot read at all. Hence a generous default and a tight Hangul threshold.
+//
+// Any Hangul character anywhere picks the Hangul branch, so mixed-language
+// text takes the lower — and therefore safer — threshold and stays
+// translated.
+function isTooShortToTranslate(body) {
+  const text = meaningfulText(body);
+  const minLetters = /[가-힣]/.test(text)
+    ? CONFIG.MIN_LETTERS_HANGUL
+    : CONFIG.MIN_LETTERS_DEFAULT;
+  return (text.match(/\p{L}/gu) || []).length < minLetters;
+}
+
 function needsTranslation(body) {
   if (!body) return false;
   // Already translated → skip. To force re-translation, manually delete
@@ -263,15 +306,7 @@ function needsTranslation(body) {
   // TRANSLATING marker is allowed (recovery from cancelled runs).
   const noWhitespace = body.replace(/[\s\n\r]/g, "");
   if (!noWhitespace) return false;
-  const text = body
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/<(img|video|source|picture)\b[^>]*>/gi, "")
-    .replace(/<\/?[a-z][^>]*>/gi, "")
-    .replace(/@[\w-]+/g, "")
-    .replace(/https?:\/\/\S+/g, "")
-    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}️‍]/gu, "");
-  return /\p{L}/u.test(text);
+  return /\p{L}/u.test(meaningfulText(body));
 }
 
 // --- Generic translate-and-update flow ---
@@ -289,6 +324,23 @@ async function translateAndUpdate(adapter, core) {
 
   const original = stripArtifacts(rawBody);
   if (!original) return false;
+
+  // Measured on the artifact-stripped text, never on rawBody: a leftover
+  // "Translating..." label, or the previous translation <details> block left
+  // behind when someone deletes the TRANSLATED marker to force a re-run, would
+  // otherwise pad a short item past the threshold.
+  if (isTooShortToTranslate(original)) {
+    // Skipping writes nothing, so no marker is left behind and no event is
+    // raised — the item is re-evaluated for free on the next event, and
+    // becomes eligible if someone edits real content into it. The one write we
+    // still owe is undoing a cancelled run's "Translating..." label, which
+    // would otherwise stick forever now that no translation overwrites it.
+    if (rawBody.includes(MARKERS.TRANSLATING)) {
+      await adapter.update(original);
+    }
+    console.log(`${adapter.label} too short to translate; skipped.`);
+    return false;
+  }
 
   if (adapter.supportsInProgressMarker) {
     await adapter.update(buildTranslatingBody(original));
@@ -379,15 +431,23 @@ function reviewAdapter(github, owner, repo, prNumber, review) {
 
 // --- Main entry point ---
 //
-// Note: items authored by `github-actions[bot]` (isExcludedAuthor) are
-// skipped entirely — that identity covers every workflow bot in this repo
-// (Claude reviewer, reviewer-suggester, review-request pings, etc.), all
-// posted via the default GITHUB_TOKEN, so there is no way to translate one
-// without translating them all. Other bot identities (e.g. a dedicated Jira
-// sync bot) are still translated. The `<!-- translated-by-claude -->` marker
-// prevents re-translating any item we have already touched. The only
-// self-loop surface is the `pull_request: edited` event when we update the
-// PR body, which is gated at the YAML `if:` level via `sender.login`.
+// Note: items are skipped for exactly two reasons — the author is in
+// EXCLUDED_AUTHOR_PREFIXES (isExcludedAuthor, currently just
+// `aws-security-agent`), or the content is too short to be worth translating
+// (isTooShortToTranslate, applied inside translateAndUpdate so every item
+// type inherits it — a bare "LGTM" approval review body included).
+// Everything else is translated, `github-actions[bot]` included: the Claude
+// reviewer, reviewer-suggester and review-request pings all post under that
+// identity via the default GITHUB_TOKEN, and translating their output is
+// the point of this workflow.
+//
+// Translating bot content does not loop back on itself. We only ever
+// *update* existing items, and the workflow subscribes to `created` /
+// `submitted` events, not `edited`, so our own writes raise no new event —
+// except `pull_request: edited` when we update the PR body, which is gated
+// at the YAML `if:` level via `sender.login`. The
+// `<!-- translated-by-claude -->` marker is the backstop: it prevents
+// re-translating any item we have already touched.
 async function main({ github, context, core }) {
   const owner = context.repo.owner;
   const repo = context.repo.repo;
@@ -509,6 +569,8 @@ module.exports = {
   // of the production API — do not import from other workflow scripts.
   __test: {
     needsTranslation,
+    meaningfulText,
+    isTooShortToTranslate,
     stripArtifacts,
     buildTranslatedBody,
     extractFirstJsonObject,

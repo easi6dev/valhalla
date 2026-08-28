@@ -18,11 +18,18 @@
 # - English → Korean (original on top, Korean in collapsible)
 #
 # Scans the ENTIRE PR (body + all comments + review comments + review bodies)
-# and translates any untranslated content, except items authored by
-# `github-actions[bot]` — that identity covers every workflow bot in this
-# repo (Claude reviewer, reviewer-suggester, review-request pings, etc.),
-# all posted via the default GITHUB_TOKEN, so there is no way to translate
-# one without translating them all.
+# and translates any untranslated content. That includes content posted by
+# `github-actions[bot]` (Claude reviewer, reviewer-suggester, review-request
+# pings) — translating those AI comments is the point of this workflow.
+#
+# Two things are skipped:
+# - Content authored by `aws-security-agent[bot]`
+#   (EXCLUDED_AUTHOR_PREFIXES in translate-pr.js).
+# - Content too short to be worth translating: under 20 letters, or under 8
+#   for Hangul text ("LGTM", "확인했습니다"). A human reads those as they
+#   stand, and a translation block would only bury them. The thresholds are
+#   CONFIG.MIN_LETTERS_DEFAULT / MIN_LETTERS_HANGUL; why the two differ is
+#   explained on isTooShortToTranslate.
 #
 # All translation logic lives in `.github/scripts/translate-pr.js`. The
 # system prompt for the LLM lives in `.github/prompts/translate_pr_role.md`.
@@ -61,20 +68,20 @@ concurrency:
 jobs:
   translate:
     runs-on: mvlchain-runner
-    # Items authored by `github-actions[bot]` are excluded from translation
-    # entirely (see isExcludedAuthor in translate-pr.js) — that covers every
-    # workflow bot in this repo, since they all post via the default
-    # GITHUB_TOKEN. Non-`github-actions` bots (e.g. a dedicated Jira sync
-    # bot) are still translated.
+    # translate-pr.js skips two things: items authored by
+    # `aws-security-agent[bot]` (EXCLUDED_AUTHOR_PREFIXES) and items too short
+    # to be worth translating (isTooShortToTranslate). Everything else is
+    # translated, `github-actions[bot]` included.
     #
-    # The `sender.login != 'github-actions[bot]'` check below is a separate,
-    # narrower guard: it only prevents the `pull_request: edited` self-loop
-    # when this workflow updates the PR body (GitHub fires `pull_request:
-    # edited` with sender == github-actions[bot] on that update). Other
-    # events (issue_comment, pull_request_review, pull_request_review_comment)
-    # do NOT refire on bot edits, so they need no sender check. The marker
-    # (`<!-- translated-by-claude -->`) prevents re-translating any item we
-    # have already touched.
+    # The `sender.login != 'github-actions[bot]'` check below is unrelated
+    # to that author exclusion: it only prevents the `pull_request: edited`
+    # self-loop when this workflow updates the PR body (GitHub fires
+    # `pull_request: edited` with sender == github-actions[bot] on that
+    # update). The other events (issue_comment, pull_request_review,
+    # pull_request_review_comment) do not subscribe to `edited`, so this
+    # workflow's own updates raise no new event and need no sender check.
+    # The marker (`<!-- translated-by-claude -->`) prevents re-translating
+    # any item we have already touched.
     #
     # `issue_comment` also fires for comments on plain (non-PR) issues, so
     # it is gated on `github.event.issue.pull_request` being present —
