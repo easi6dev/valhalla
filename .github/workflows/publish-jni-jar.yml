@@ -88,14 +88,20 @@ jobs:
 
       # -- 3. Resolve publish metadata ------------------------------------------
       # artifactId is always valhalla-jni (consistent single name).
-      # Version carries the channel signal:
-      #   dist branches    -> X.Y.Z                          (release, single publish)
-      #   snapshot/others  -> X.Y.Z-SNAPSHOT                 (kept for backward compat)
-      #                    +  YYYY.M.D.<run_number>          (date-versioned, immutable)
+      # Every build publishes a date version: YYYY.M.D.<run_number>.
+      #   dist branches    -> YYYY.M.D.<run_number>          (release, immutable)
+      #   snapshot/others  -> YYYY.M.D.<run_number>          (immutable)
+      #                    +  X.Y.Z-SNAPSHOT                 (mutable, back-compat)
+      #
+      # Dist branches deliberately do NOT publish a fixed X.Y.Z. GHP treats release
+      # versions as immutable, so re-publishing X.Y.Z on every dist build returns
+      # 409 Conflict. More importantly a fixed coordinate would be a lie: the native
+      # .so changes each build, so pinning X.Y.Z would silently hand consumers
+      # whichever binary landed first — and a JAR/tile version mismatch surfaces as
+      # a SIGBUS, not a clean error. Consumers therefore track date versions
+      # (e.g. "2026.+" with isChanging, or an exact 2026.M.D.N pin).
       - name: Resolve publish metadata
         id: meta
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="${{ steps.branch.outputs.name }}"
 
@@ -104,34 +110,26 @@ jobs:
             echo "ERROR: Could not extract version from gradle.properties" && exit 1
           fi
 
+          # Unique per run, so it never collides with an existing GHP version.
+          DATE_VERSION="$(date -u +'%Y.%-m.%-d').${GITHUB_RUN_NUMBER}"
+
           if [[ "${BRANCH}" == dist* ]]; then
-            VERSION="${BASE_VERSION}"
-            DATE_VERSION="$(date -u +'%Y.%-m.%-d').${GITHUB_RUN_NUMBER}"
-            # GitHub Packages treats release versions as immutable: re-PUTting an
-            # existing X.Y.Z returns 409 Conflict. Probe GHP and skip the fixed
-            # publish if this version is already there, so repeat dist builds are
-            # idempotent instead of failing. The date-versioned publish below is
-            # always unique, so it still runs and remains the traceable artifact.
-            PUBLISHED=$(gh api --paginate "orgs/easi6dev/packages/maven/global.tada.valhalla-jni/versions" --jq '.[].name' 2>/dev/null || true)
-            if grep -qx "${VERSION}" <<< "${PUBLISHED}"; then
-              echo "::notice::valhalla-jni:${VERSION} already published; skipping fixed-version publish."
-              PUBLISH_FIXED="false"
-            else
-              PUBLISH_FIXED="true"
-            fi
+            # Release channel: the date version is the only artifact.
+            VERSION=""
           else
+            # SNAPSHOT is mutable in GHP, so re-publishing is always safe.
             VERSION="${BASE_VERSION}-SNAPSHOT"
-            DATE_VERSION="$(date -u +'%Y.%-m.%-d').${GITHUB_RUN_NUMBER}"
-            # SNAPSHOT versions are mutable in GHP, so re-publishing is always safe.
-            PUBLISH_FIXED="true"
           fi
 
           echo "artifact_id=valhalla-jni"      >> "$GITHUB_OUTPUT"
-          echo "publish_fixed=${PUBLISH_FIXED}"  >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}"             >> "$GITHUB_OUTPUT"
           echo "date_version=${DATE_VERSION}"   >> "$GITHUB_OUTPUT"
-          echo "Resolved: valhalla-jni:${VERSION} (branch=${BRANCH})"
-          [[ -n "${DATE_VERSION}" ]] && echo "Also publishing date-versioned: valhalla-jni:${DATE_VERSION}"
+          echo "Resolved: valhalla-jni:${DATE_VERSION} (branch=${BRANCH})"
+          if [[ -n "${VERSION}" ]]; then
+            echo "Also publishing mutable alias: valhalla-jni:${VERSION}"
+          else
+            echo "Release channel: publishing date version only (no fixed X.Y.Z)."
+          fi
 
       # -- 4. Resolve ECR image tag ---------------------------------------------
       - name: Resolve image tag
@@ -203,38 +201,38 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      # -- 8. Publish to GitHub Packages via Gradle (mirrors tada-spring-common) -
-      # Pass -Pversion to override gradle.properties at publish time so dist
-      # branches publish as X.Y.Z and snapshot branches as X.Y.Z-SNAPSHOT.
-      - name: Publish to GitHub Packages
-        if: steps.meta.outputs.publish_fixed == 'true'
+      # -- 8. Publish the date-versioned artifact (all branches) ----------------
+      # This is the primary publish. YYYY.M.D.<run_number> is unique per run, so it
+      # never collides with an existing GHP version and every build leaves an
+      # immutable, traceable artifact. Consumers track these (e.g. "2026.+" with
+      # isChanging, or an exact pin).
+      - name: Publish date-versioned artifact
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_USERNAME: ${{ github.actor }}
         working-directory: ${{ env.GRADLE_DIR }}
         run: |
-          echo "Branch    : ${{ steps.branch.outputs.name }}"
-          echo "ArtifactId: ${{ steps.meta.outputs.artifact_id }}"
-          echo "Version   : ${{ steps.meta.outputs.version }}"
+          echo "Branch      : ${{ steps.branch.outputs.name }}"
+          echo "ArtifactId  : ${{ steps.meta.outputs.artifact_id }}"
+          echo "Date version: ${{ steps.meta.outputs.date_version }}"
 
           chmod +x gradlew
-          ./gradlew --no-daemon publish -Pversion="${{ steps.meta.outputs.version }}"
+          ./gradlew --no-daemon publish -Pversion="${{ steps.meta.outputs.date_version }}"
 
-      # -- 8b. Publish date-versioned artifact (all branches) -------------------
-      # Every build gets a second publish under a YYYY.M.D.<run_number> version so
-      # each CI run leaves an immutable, traceable artifact in GHP alongside the
-      # mutable 1.0.0-SNAPSHOT (snapshot) or the fixed 1.0.0 (dist). Because this
-      # version is unique per run it never collides, so it is the publish that is
-      # guaranteed to succeed even when the fixed-version publish above is skipped.
-      - name: Publish date-versioned artifact
-        if: steps.meta.outputs.date_version != ''
+      # -- 8b. Publish the mutable SNAPSHOT alias (non-dist branches only) ------
+      # Snapshot branches also refresh X.Y.Z-SNAPSHOT for backward compatibility
+      # with consumers that track the moving snapshot. SNAPSHOT versions are
+      # mutable in GHP, so this re-publish is always safe. Dist branches skip this
+      # (meta.version is empty) — a release must not have a mutable coordinate.
+      - name: Publish SNAPSHOT alias
+        if: steps.meta.outputs.version != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_USERNAME: ${{ github.actor }}
         working-directory: ${{ env.GRADLE_DIR }}
         run: |
-          echo "Date version: ${{ steps.meta.outputs.date_version }}"
-          ./gradlew --no-daemon publish -Pversion="${{ steps.meta.outputs.date_version }}"
+          echo "SNAPSHOT alias: ${{ steps.meta.outputs.version }}"
+          ./gradlew --no-daemon publish -Pversion="${{ steps.meta.outputs.version }}"
 
       # -- 9. Create and push git tag (dist branches only) ----------------------
       - name: Create and push git tag
@@ -242,8 +240,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.meta.outputs.version }}"
-          TAG="v${VERSION}"
+          TAG="v${{ steps.meta.outputs.date_version }}"
           echo "Target tag: ${TAG}"
 
           git config user.email "github-actions@github.com"
@@ -267,9 +264,9 @@ jobs:
           echo "|-------|-------|"                                                                         >> "$GITHUB_STEP_SUMMARY"
           echo "| Branch | \`${{ steps.branch.outputs.name }}\` |"                                      >> "$GITHUB_STEP_SUMMARY"
           echo "| ArtifactId | \`${{ steps.meta.outputs.artifact_id }}\` |"                             >> "$GITHUB_STEP_SUMMARY"
-          echo "| Version | \`${{ steps.meta.outputs.version }}\` |"                                    >> "$GITHUB_STEP_SUMMARY"
-          if [[ -n "${{ steps.meta.outputs.date_version }}" ]]; then
-            echo "| Date version | \`${{ steps.meta.outputs.date_version }}\` |"                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Version | \`${{ steps.meta.outputs.date_version }}\` |"                               >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "${{ steps.meta.outputs.version }}" ]]; then
+            echo "| SNAPSHOT alias | \`${{ steps.meta.outputs.version }}\` |"                          >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "| Source image | \`${{ steps.image.outputs.full }}\` |"                                 >> "$GITHUB_STEP_SUMMARY"
           echo "| Publish method | \`./gradlew publish\` (native libs from Docker) |"                   >> "$GITHUB_STEP_SUMMARY"
