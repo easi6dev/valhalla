@@ -104,7 +104,7 @@ jobs:
 
           if [[ "${BRANCH}" == dist* ]]; then
             VERSION="${BASE_VERSION}"
-            DATE_VERSION=""
+            DATE_VERSION="$(date -u +'%Y.%-m.%-d').${GITHUB_RUN_NUMBER}"
           else
             VERSION="${BASE_VERSION}-SNAPSHOT"
             DATE_VERSION="$(date -u +'%Y.%-m.%-d').${GITHUB_RUN_NUMBER}"
