@@ -94,6 +94,8 @@ jobs:
       #                    +  YYYY.M.D.<run_number>          (date-versioned, immutable)
       - name: Resolve publish metadata
         id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="${{ steps.branch.outputs.name }}"
 
@@ -105,12 +107,27 @@ jobs:
           if [[ "${BRANCH}" == dist* ]]; then
             VERSION="${BASE_VERSION}"
             DATE_VERSION="$(date -u +'%Y.%-m.%-d').${GITHUB_RUN_NUMBER}"
+            # GitHub Packages treats release versions as immutable: re-PUTting an
+            # existing X.Y.Z returns 409 Conflict. Probe GHP and skip the fixed
+            # publish if this version is already there, so repeat dist builds are
+            # idempotent instead of failing. The date-versioned publish below is
+            # always unique, so it still runs and remains the traceable artifact.
+            PUBLISHED=$(gh api --paginate "orgs/easi6dev/packages/maven/global.tada.valhalla-jni/versions" --jq '.[].name' 2>/dev/null || true)
+            if grep -qx "${VERSION}" <<< "${PUBLISHED}"; then
+              echo "::notice::valhalla-jni:${VERSION} already published; skipping fixed-version publish."
+              PUBLISH_FIXED="false"
+            else
+              PUBLISH_FIXED="true"
+            fi
           else
             VERSION="${BASE_VERSION}-SNAPSHOT"
             DATE_VERSION="$(date -u +'%Y.%-m.%-d').${GITHUB_RUN_NUMBER}"
+            # SNAPSHOT versions are mutable in GHP, so re-publishing is always safe.
+            PUBLISH_FIXED="true"
           fi
 
           echo "artifact_id=valhalla-jni"      >> "$GITHUB_OUTPUT"
+          echo "publish_fixed=${PUBLISH_FIXED}"  >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}"             >> "$GITHUB_OUTPUT"
           echo "date_version=${DATE_VERSION}"   >> "$GITHUB_OUTPUT"
           echo "Resolved: valhalla-jni:${VERSION} (branch=${BRANCH})"
@@ -190,6 +207,7 @@ jobs:
       # Pass -Pversion to override gradle.properties at publish time so dist
       # branches publish as X.Y.Z and snapshot branches as X.Y.Z-SNAPSHOT.
       - name: Publish to GitHub Packages
+        if: steps.meta.outputs.publish_fixed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_USERNAME: ${{ github.actor }}
@@ -202,11 +220,12 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon publish -Pversion="${{ steps.meta.outputs.version }}"
 
-      # -- 8b. Publish date-versioned artifact (snapshot branches only) ---------
-      # Snapshot branches get a second publish under a YYYY.M.D.<run_number>
-      # version so each CI build leaves an immutable, traceable artifact in GHP
-      # alongside the mutable 1.0.0-SNAPSHOT. Dist branches skip this step
-      # (DATE_VERSION is empty).
+      # -- 8b. Publish date-versioned artifact (all branches) -------------------
+      # Every build gets a second publish under a YYYY.M.D.<run_number> version so
+      # each CI run leaves an immutable, traceable artifact in GHP alongside the
+      # mutable 1.0.0-SNAPSHOT (snapshot) or the fixed 1.0.0 (dist). Because this
+      # version is unique per run it never collides, so it is the publish that is
+      # guaranteed to succeed even when the fixed-version publish above is skipped.
       - name: Publish date-versioned artifact
         if: steps.meta.outputs.date_version != ''
         env:
