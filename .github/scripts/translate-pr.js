@@ -8,11 +8,19 @@
 //                            TRANSLATED block + TRANSLATED marker
 //   [TRANSLATED marker]    → skip (already translated), UNLESS a real human
 //                            (non-bot) just edited this exact item — then it
-//                            is retranslated to catch up with the edit. See
-//                            getForceRetranslateTarget. To force re-
-//                            translation of an untouched item, manually
-//                            delete the <!-- translated-by-claude --> marker
-//                            (the bot will pick it up on next event).
+//                            resyncs to catch up with the edit (see
+//                            getForceRetranslateTarget). Which side was
+//                            edited decides the direction: if the original
+//                            changed, it's retranslated as usual; if only
+//                            the translation (inside the <details> block)
+//                            changed, THAT is now treated as ground truth
+//                            and the original is regenerated from it
+//                            instead (syncFromEditedTranslation) — so
+//                            correcting either side updates the other to
+//                            match. To force re-translation of an untouched
+//                            item, manually delete the
+//                            <!-- translated-by-claude --> marker (the bot
+//                            will pick it up on next event).
 //   [TRANSLATING marker]   → leftover from a cancelled run; gets cleaned up
 //                            and retried automatically on next event
 //   [SKIP marker]           → always skip, unconditionally (see MARKERS.SKIP
@@ -260,6 +268,41 @@ function buildTranslatedBody(original, result) {
   return `${MARKERS.TRANSLATED}\n${result.translation}\n\n${TRANSLATION_DETAILS_OPEN}\n<summary>${result.language}</summary>\n\n${original}\n\n</details>`;
 }
 
+// Structural inverse of buildTranslatedBody: pulls the original and the
+// translation back out of an already-translated body, whichever of the two
+// shapes it is (original-on-top for an English source, translation-on-top
+// for a non-English source — see buildTranslatedBody). Returns null if
+// `body` isn't in that shape (not yet translated, or hand-edited into
+// something the regex no longer recognizes) — callers fall back to treating
+// the whole body as an untranslated original in that case.
+function parseTranslatedBody(body) {
+  if (!body || !body.includes(MARKERS.TRANSLATED)) return null;
+  const match = body.match(
+    /<details data-tada-translation="true">\n<summary>([^<]*)<\/summary>\n\n([\s\S]*?)\n\n<\/details>/,
+  );
+  if (!match) return null;
+  const [, summaryLabel, insideDetails] = match;
+  const markerIndex = body.indexOf(MARKERS.TRANSLATED);
+  const detailsIndex = body.indexOf(TRANSLATION_DETAILS_OPEN);
+  const isEnglishSourceShape = markerIndex > detailsIndex;
+  if (isEnglishSourceShape) {
+    return {
+      original: body.slice(0, detailsIndex).trim(),
+      translation: insideDetails.trim(),
+      summaryLabel,
+      isEnglishSourceShape: true,
+    };
+  }
+  return {
+    original: insideDetails.trim(),
+    translation: body
+      .slice(markerIndex + MARKERS.TRANSLATED.length, detailsIndex)
+      .trim(),
+    summaryLabel,
+    isEnglishSourceShape: false,
+  };
+}
+
 // --- Strip helpers ---
 function stripArtifacts(body) {
   if (!body) return body;
@@ -362,6 +405,38 @@ async function safeUpdate(adapter, body, core, context) {
   }
 }
 
+// When a real human edits an already-translated item and only the
+// translation (inside the <details> block) actually changed — not the
+// original above/below it — blindly retranslating the unchanged original
+// would silently throw away their edit. Treat their edited translation as
+// ground truth instead, and derive a fresh original FROM it via the same
+// bidirectional translateText() (a Korean edit yields a fresh English
+// original; an English edit yields a fresh non-English original) — so
+// correcting either side updates the other to match, symmetrically.
+async function syncFromEditedTranslation(adapter, after, core) {
+  try {
+    const reverse = await translateText(after.translation);
+    const rebuilt = after.isEnglishSourceShape
+      ? buildTranslatedBody(reverse.translation, {
+          language: "English",
+          translation: after.translation,
+        })
+      : buildTranslatedBody(reverse.translation, {
+          language: after.summaryLabel,
+          translation: after.translation,
+        });
+    await adapter.update(rebuilt);
+    console.log(`${adapter.label} original resynced from edited translation.`);
+    return true;
+  } catch (e) {
+    const message = e.message || String(e);
+    core.warning(
+      `Failed to resync ${adapter.label} from edited translation: ${message}`,
+    );
+    return { failed: true, label: adapter.label, message };
+  }
+}
+
 // --- Generic translate-and-update flow ---
 //
 // adapter shape:
@@ -371,10 +446,31 @@ async function safeUpdate(adapter, body, core, context) {
 //     update(body): Promise<void>,                // write a new body
 //     supportsInProgressMarker: boolean,          // false for PR review bodies
 //   }
-async function translateAndUpdate(adapter, core, { forceRetranslate = false } = {}) {
+async function translateAndUpdate(
+  adapter,
+  core,
+  { forceRetranslate = false, beforeBody } = {},
+) {
   const rawBody = adapter.getBody();
   if (!needsTranslation(rawBody, { ignoreTranslatedMarker: forceRetranslate })) {
     return false;
+  }
+
+  // A real human edit to an already-translated item: figure out which side
+  // they actually touched before falling through to the normal "retranslate
+  // the original" path below, which assumes the ORIGINAL is what changed.
+  if (forceRetranslate && beforeBody) {
+    const before = parseTranslatedBody(beforeBody);
+    const after = parseTranslatedBody(rawBody);
+    if (
+      before &&
+      after &&
+      before.original === after.original &&
+      before.translation !== after.translation &&
+      !isTooShortToTranslate(after.translation)
+    ) {
+      return syncFromEditedTranslation(adapter, after, core);
+    }
   }
 
   const original = stripArtifacts(rawBody);
@@ -499,20 +595,28 @@ function reviewAdapter(github, owner, repo, prNumber, review) {
 // carries the TRANSLATED marker — the person just changed its content, so
 // the existing translation is stale. Every other item in the PR keeps the
 // normal marker-based skip. Returns null for anything that isn't an
-// `edited` action (new items always go through the normal skip/translate
-// path already).
+// `edited` action whose `changes.body` is present — GitHub only includes
+// that when the body itself was what changed (an edit to just the PR title,
+// for instance, is `action: 'edited'` too but carries no `changes.body`,
+// and forcing a retranslate off of that would just burn an LLM call to
+// reproduce the same translation). `beforeBody` (the pre-edit body, from
+// `changes.body.from`) rides along so translateAndUpdate can diff it
+// against the current body and tell which side of an already-translated
+// item — the original or the translation — the person actually touched.
 function getForceRetranslateTarget(context) {
   const { eventName, payload } = context;
   if (payload.action !== "edited") return null;
-  if (eventName === "pull_request") return { kind: "prBody" };
+  const beforeBody = payload.changes?.body?.from;
+  if (beforeBody === undefined) return null;
+  if (eventName === "pull_request") return { kind: "prBody", beforeBody };
   if (eventName === "issue_comment") {
-    return { kind: "issueComment", id: payload.comment.id };
+    return { kind: "issueComment", id: payload.comment.id, beforeBody };
   }
   if (eventName === "pull_request_review_comment") {
-    return { kind: "reviewComment", id: payload.comment.id };
+    return { kind: "reviewComment", id: payload.comment.id, beforeBody };
   }
   if (eventName === "pull_request_review") {
-    return { kind: "review", id: payload.review.id };
+    return { kind: "review", id: payload.review.id, beforeBody };
   }
   return null;
 }
@@ -582,11 +686,15 @@ async function main({ github, context, core }) {
     pull_number: prNumber,
   });
   if (!isExcludedAuthor(pr.user?.login)) {
+    const forcePrBody = forceTarget?.kind === "prBody";
     recordResult(
       await translateAndUpdate(
         prBodyAdapter(github, owner, repo, prNumber, pr),
         core,
-        { forceRetranslate: forceTarget?.kind === "prBody" },
+        {
+          forceRetranslate: forcePrBody,
+          beforeBody: forcePrBody ? forceTarget.beforeBody : undefined,
+        },
       ),
     );
   }
@@ -604,7 +712,10 @@ async function main({ github, context, core }) {
       await translateAndUpdate(
         issueCommentAdapter(github, owner, repo, comment),
         core,
-        { forceRetranslate },
+        {
+          forceRetranslate,
+          beforeBody: forceRetranslate ? forceTarget.beforeBody : undefined,
+        },
       ),
     );
   }
@@ -622,7 +733,10 @@ async function main({ github, context, core }) {
       await translateAndUpdate(
         reviewCommentAdapter(github, owner, repo, comment),
         core,
-        { forceRetranslate },
+        {
+          forceRetranslate,
+          beforeBody: forceRetranslate ? forceTarget.beforeBody : undefined,
+        },
       ),
     );
   }
@@ -650,7 +764,10 @@ async function main({ github, context, core }) {
       await translateAndUpdate(
         reviewAdapter(github, owner, repo, prNumber, review),
         core,
-        { forceRetranslate },
+        {
+          forceRetranslate,
+          beforeBody: forceRetranslate ? forceTarget.beforeBody : undefined,
+        },
       ),
     );
   }
@@ -688,5 +805,7 @@ module.exports = {
     getForceRetranslateTarget,
     safeUpdate,
     translateAndUpdate,
+    parseTranslatedBody,
+    syncFromEditedTranslation,
   },
 };
