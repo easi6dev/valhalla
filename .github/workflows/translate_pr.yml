@@ -19,17 +19,25 @@
 #
 # Scans the ENTIRE PR (body + all comments + review comments + review bodies)
 # and translates any untranslated content. That includes content posted by
-# `github-actions[bot]` (Claude reviewer, reviewer-suggester, review-request
-# pings) — translating those AI comments is the point of this workflow.
+# `github-actions[bot]` — translating the Claude reviewer's prose comments is
+# the point of this workflow. Other `github-actions[bot]` automation (the
+# reviewer-suggester, review-request pings, Jira/rebase/deploy bots) opts
+# itself out via the `<!-- translation-skip -->` marker below, since it's
+# fixed template text or structured data with no real prose to translate.
 #
-# Two things are skipped:
+# Three things are skipped:
 # - Content authored by `aws-security-agent[bot]`
 #   (EXCLUDED_AUTHOR_PREFIXES in translate-pr.js).
-# - Content too short to be worth translating: under 20 letters, or under 8
+# - Content too short to be worth translating: under 40 letters, or under 12
 #   for Hangul text ("LGTM", "확인했습니다"). A human reads those as they
 #   stand, and a translation block would only bury them. The thresholds are
 #   CONFIG.MIN_LETTERS_DEFAULT / MIN_LETTERS_HANGUL; why the two differ is
 #   explained on isTooShortToTranslate.
+# - Content that opts itself out by including the `<!-- translation-skip -->`
+#   marker anywhere in its body. This is how ANOTHER GitHub Action (or a
+#   human) excludes its own comments from translation without needing to
+#   touch this shared repo's author allowlist — just have it post that HTML
+#   comment (invisible when rendered) somewhere in the body it writes.
 #
 # All translation logic lives in `.github/scripts/translate-pr.js`. The
 # system prompt for the LLM lives in `.github/prompts/translate_pr_role.md`.
@@ -38,8 +46,20 @@
 # - `<!-- translated-by-claude -->`     → already translated, skip
 # - `<!-- translation-in-progress -->`  → run was cancelled mid-flight,
 #                                          recovered automatically next event
+# - `<!-- translation-skip -->`         → opt-out, always skip (see above)
 # To force re-translation of an item, manually delete the
 # `<!-- translated-by-claude -->` marker from its body.
+#
+# All four event types also subscribe to `edited`, restricted (see the `if:`
+# below) to edits made by a real human — a bot's edit (ours or anyone
+# else's) is ignored. On a real human edit:
+# - An item that was originally skipped for being too short (no marker
+#   written) is re-evaluated, and becomes eligible if real content was
+#   edited in.
+# - The single item the person actually edited is retranslated even if it
+#   already carries the TRANSLATED marker — the existing translation is
+#   stale once the source content changed. Every other item in the PR keeps
+#   the normal "already translated, skip" behavior.
 #
 # Reuses the same org secrets as claude-pr-review-spring-boot.yml
 # (ORG_LITELLM_API_KEY, ORG_LITELLM_ENDPOINT) — no additional setup needed.
@@ -48,11 +68,11 @@ name: Translate PR Comments
 
 on:
   issue_comment:
-    types: [created]
+    types: [created, edited]
   pull_request_review_comment:
-    types: [created]
+    types: [created, edited]
   pull_request_review:
-    types: [submitted]
+    types: [submitted, edited]
   pull_request:
     types: [opened, edited]
 
@@ -73,15 +93,27 @@ jobs:
     # to be worth translating (isTooShortToTranslate). Everything else is
     # translated, `github-actions[bot]` included.
     #
-    # The `sender.login != 'github-actions[bot]'` check below is unrelated
-    # to that author exclusion: it only prevents the `pull_request: edited`
-    # self-loop when this workflow updates the PR body (GitHub fires
-    # `pull_request: edited` with sender == github-actions[bot] on that
-    # update). The other events (issue_comment, pull_request_review,
-    # pull_request_review_comment) do not subscribe to `edited`, so this
-    # workflow's own updates raise no new event and need no sender check.
-    # The marker (`<!-- translated-by-claude -->`) prevents re-translating
-    # any item we have already touched.
+    # The `github.event.action != 'edited' || sender.type != 'Bot'` check
+    # below is unrelated to the author exclusion above: it prevents a
+    # self-loop on `edited` events, and (deliberately, per user request)
+    # excludes ANY bot's edit, not just our own. Every event type here now
+    # subscribes to `edited` (see the `on:` block), and translate-pr.js
+    # itself writes updates twice per item that supports the in-progress
+    # marker (issue comments, review comments): once to add the
+    # "🔴 Translating..." label, once to write the final translated body.
+    # Each of those writes is an API update that GitHub reports back as an
+    # `edited` event with sender.type == 'Bot'. Without this guard, that
+    # write would trigger a new run, which (thanks to
+    # `concurrency.cancel-in-progress`) cancels the run before it reaches
+    # the final write and re-triggers itself — an infinite loop. The guard
+    # only excludes `edited` events with a bot sender (action != 'edited' is
+    # true for every other action, short-circuiting the check); a real
+    # human edit always passes through, so a previously too-short-to-
+    # translate item is re-evaluated, and an already-translated item is
+    # deliberately retranslated for that one edited item (see
+    # getForceRetranslateTarget in translate-pr.js). The marker
+    # (`<!-- translated-by-claude -->`) is the separate mechanism that
+    # prevents re-translating every OTHER item we have already completed.
     #
     # `issue_comment` also fires for comments on plain (non-PR) issues, so
     # it is gated on `github.event.issue.pull_request` being present —
@@ -90,12 +122,22 @@ jobs:
     if: >-
       (
         github.event_name == 'pull_request' &&
-        github.event.sender.login != 'github-actions[bot]' &&
-        github.event.pull_request.head.repo.full_name == github.repository
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.action != 'edited' || github.event.sender.type != 'Bot')
       ) ||
-      github.event_name == 'pull_request_review' ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
-      github.event_name == 'pull_request_review_comment'
+      (
+        github.event_name == 'pull_request_review' &&
+        (github.event.action != 'edited' || github.event.sender.type != 'Bot')
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        (github.event.action != 'edited' || github.event.sender.type != 'Bot')
+      ) ||
+      (
+        github.event_name == 'pull_request_review_comment' &&
+        (github.event.action != 'edited' || github.event.sender.type != 'Bot')
+      )
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

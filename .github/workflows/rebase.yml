@@ -76,5 +76,5 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner, repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: ':x: Rebase failed. There may be merge conflicts.'
+              body: ':x: Rebase failed. There may be merge conflicts.\n<!-- translation-skip -->'
             });

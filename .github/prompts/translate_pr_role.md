@@ -84,3 +84,20 @@ Korean content in some sections, or vice versa):
   ignore them when detecting language.
 - If after ignoring template scaffolding the content is still mixed, prefer the
   language with **more meaningful sentences**, not the one with more characters.
+
+### Do not guess a language from a coincidental word match
+
+Short or informal fragments can superficially resemble a language they were
+never written in — e.g. `mu ser war` is not German just because `war` also
+happens to be a German word; it is too short and has no real grammatical
+structure to identify as coherent prose in any specific language. Do not let
+one matching token talk you into a confident, unrelated language guess.
+
+- If you cannot identify the input as coherent prose in a specific language
+  with real confidence — a short interjection, informal transliteration,
+  meme text, or a fragment that only coincidentally matches vocabulary from
+  another language — do NOT fabricate a plausible-sounding translation from
+  that guess.
+- In that case, set `"translation"` to the exact original text, unchanged,
+  and set `"language"` to your best-effort guess. A no-op translation is
+  always safer than a confidently wrong one.

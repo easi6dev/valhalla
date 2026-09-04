@@ -166,6 +166,9 @@ const CommentList = [
       return;
     }
 
+    // Pure headings + Jira links, no translatable prose — opt out so
+    // translate-pr.js doesn't waste an LLM call (or risk mangling the links).
+    commentParts.push('<!-- translation-skip -->');
     const commentBody = commentParts.join('\n');
 
     console.log(`Add Comment:\n${commentBody}`);

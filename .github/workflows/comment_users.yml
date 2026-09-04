@@ -57,10 +57,10 @@ jobs:
               '- `M)` Medium priority - Should be addressed if possible\n' +
               '- `L)` Low priority - Optional improvement\n' +
               '- `Q)` Question - Requires a response from the author'
-            
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: user_mentions + prefixGuide
+              body: user_mentions + prefixGuide + '\n<!-- translation-skip -->'
             })

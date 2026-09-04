@@ -6,12 +6,22 @@
 //
 //   [no marker]            → translate, write TRANSLATING marker, then write
 //                            TRANSLATED block + TRANSLATED marker
-//   [TRANSLATED marker]    → skip (already translated). To force re-
-//                            translation, manually delete the
-//                            <!-- translated-by-claude --> marker
+//   [TRANSLATED marker]    → skip (already translated), UNLESS a real human
+//                            (non-bot) just edited this exact item — then it
+//                            is retranslated to catch up with the edit. See
+//                            getForceRetranslateTarget. To force re-
+//                            translation of an untouched item, manually
+//                            delete the <!-- translated-by-claude --> marker
 //                            (the bot will pick it up on next event).
 //   [TRANSLATING marker]   → leftover from a cancelled run; gets cleaned up
 //                            and retried automatically on next event
+//   [SKIP marker]           → always skip, unconditionally (see MARKERS.SKIP
+//                            below). Any author — human or another GitHub
+//                            Action — can include
+//                            <!-- translation-skip --> anywhere in a PR
+//                            body/comment/review to opt that item out of
+//                            translation entirely, with no need to touch
+//                            this shared repo's author allowlist.
 //
 // Content too short to be worth translating ("LGTM", "확인했습니다") is skipped
 // without any write — no marker, no LLM call. See isTooShortToTranslate.
@@ -32,8 +42,8 @@ const CONFIG = {
   MAX_INPUT_CHARS: 16000,
   // Minimum letter count (after meaningfulText cleaning) for an item to be
   // worth translating. See isTooShortToTranslate for why the two differ.
-  MIN_LETTERS_DEFAULT: 20,
-  MIN_LETTERS_HANGUL: 8,
+  MIN_LETTERS_DEFAULT: 40,
+  MIN_LETTERS_HANGUL: 12,
   RETRY_COUNT: 1,
   RETRY_DELAY_MS: 2000,
   PER_PAGE: 100,
@@ -43,6 +53,10 @@ const CONFIG = {
 const MARKERS = {
   TRANSLATED: "<!-- translated-by-claude -->",
   TRANSLATING: "<!-- translation-in-progress -->",
+  // Any other GitHub Action (or a human) can opt a body out of translation
+  // entirely by including this HTML comment anywhere in it — invisible in
+  // rendered markdown, checked unconditionally before author/length rules.
+  SKIP: "<!-- translation-skip -->",
 };
 
 // Bot logins excluded from translation entirely. Matched by prefix so the
@@ -258,8 +272,16 @@ function stripArtifacts(body) {
     .replace(new RegExp(MARKERS.TRANSLATED, "g"), "")
     .replace(
       /\n*<details data-tada-translation="true">[\s\S]*?<\/details>\n*/g,
-      "",
+      "\n\n",
     )
+    // The marker/details removals above each leave their own surrounding
+    // newlines behind; when content sits on both sides of the removed span
+    // (e.g. a human editing text in right after the TRANSLATED marker) they
+    // can stack into 3+ blank lines with nothing between them. Collapsing to
+    // one blank line is safe either way: markdown renders any run of blank
+    // lines identically to a single one, so this never changes real
+    // formatting, it only fixes the case where removal left zero separation.
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -298,15 +320,46 @@ function isTooShortToTranslate(body) {
   return (text.match(/\p{L}/gu) || []).length < minLetters;
 }
 
-function needsTranslation(body) {
+// `ignoreTranslatedMarker` is set by the caller for the single item that a
+// real human `edited` event named (see getForceRetranslateTarget in main).
+// Every other item keeps the normal skip-if-already-translated behavior.
+function needsTranslation(body, { ignoreTranslatedMarker = false } = {}) {
   if (!body) return false;
+  // Explicit opt-out → always skip, no exceptions. Unlike the TRANSLATED
+  // marker below, this is never overridden by ignoreTranslatedMarker: an
+  // author asking not to be translated should win even over a later human
+  // edit that would otherwise force a retranslation.
+  if (body.includes(MARKERS.SKIP)) return false;
   // Already translated → skip. To force re-translation, manually delete
-  // the TRANSLATED marker (the bot picks it up on the next event).
-  if (body.includes(MARKERS.TRANSLATED)) return false;
+  // the TRANSLATED marker (the bot picks it up on the next event), or edit
+  // the item yourself (see ignoreTranslatedMarker above).
+  if (!ignoreTranslatedMarker && body.includes(MARKERS.TRANSLATED)) {
+    return false;
+  }
   // TRANSLATING marker is allowed (recovery from cancelled runs).
   const noWhitespace = body.replace(/[\s\n\r]/g, "");
   if (!noWhitespace) return false;
   return /\p{L}/u.test(meaningfulText(body));
+}
+
+// Wraps a single adapter.update() call that is not the "did the translation
+// itself succeed" write (that one keeps its own try/catch below, since a
+// failure there is a real translation failure worth tracking in the job
+// summary). This is for writes whose only purpose is bookkeeping — the
+// in-progress label, or cleaning up a stale artifact — where a bare
+// transient GitHub API error (observed live: an empty 500 response body)
+// must not throw out of translateAndUpdate and abort the rest of the batch
+// in main(). Logs a warning and continues either way.
+async function safeUpdate(adapter, body, core, context) {
+  try {
+    await adapter.update(body);
+    return true;
+  } catch (e) {
+    core.warning(
+      `Failed to update ${adapter.label} (${context}): ${e.message || String(e)}`,
+    );
+    return false;
+  }
 }
 
 // --- Generic translate-and-update flow ---
@@ -318,9 +371,11 @@ function needsTranslation(body) {
 //     update(body): Promise<void>,                // write a new body
 //     supportsInProgressMarker: boolean,          // false for PR review bodies
 //   }
-async function translateAndUpdate(adapter, core) {
+async function translateAndUpdate(adapter, core, { forceRetranslate = false } = {}) {
   const rawBody = adapter.getBody();
-  if (!needsTranslation(rawBody)) return false;
+  if (!needsTranslation(rawBody, { ignoreTranslatedMarker: forceRetranslate })) {
+    return false;
+  }
 
   const original = stripArtifacts(rawBody);
   if (!original) return false;
@@ -333,17 +388,25 @@ async function translateAndUpdate(adapter, core) {
     // Skipping writes nothing, so no marker is left behind and no event is
     // raised — the item is re-evaluated for free on the next event, and
     // becomes eligible if someone edits real content into it. The one write we
-    // still owe is undoing a cancelled run's "Translating..." label, which
-    // would otherwise stick forever now that no translation overwrites it.
-    if (rawBody.includes(MARKERS.TRANSLATING)) {
-      await adapter.update(original);
+    // still owe is undoing a cancelled run's "Translating..." label, or (when
+    // forced by a real edit) a now-stale TRANSLATED block that no longer
+    // matches the edited-down content — both would otherwise stick forever
+    // since nothing else overwrites them.
+    if (
+      rawBody.includes(MARKERS.TRANSLATING) ||
+      (forceRetranslate && rawBody.includes(MARKERS.TRANSLATED))
+    ) {
+      await safeUpdate(adapter, original, core, "too-short cleanup");
     }
     console.log(`${adapter.label} too short to translate; skipped.`);
     return false;
   }
 
   if (adapter.supportsInProgressMarker) {
-    await adapter.update(buildTranslatingBody(original));
+    // Non-fatal: this is just a progress label, nothing downstream in this
+    // run depends on it having landed. If it fails, still go on to actually
+    // translate below — that's the part that matters.
+    await safeUpdate(adapter, buildTranslatingBody(original), core, "in-progress label");
   }
 
   try {
@@ -429,25 +492,59 @@ function reviewAdapter(github, owner, repo, prNumber, review) {
   };
 }
 
+// --- Force-retranslate target resolution ---
+//
+// On a real (non-bot, see the YAML `if:` guard) `edited` event, the single
+// item named by the event payload should be retranslated even if it already
+// carries the TRANSLATED marker — the person just changed its content, so
+// the existing translation is stale. Every other item in the PR keeps the
+// normal marker-based skip. Returns null for anything that isn't an
+// `edited` action (new items always go through the normal skip/translate
+// path already).
+function getForceRetranslateTarget(context) {
+  const { eventName, payload } = context;
+  if (payload.action !== "edited") return null;
+  if (eventName === "pull_request") return { kind: "prBody" };
+  if (eventName === "issue_comment") {
+    return { kind: "issueComment", id: payload.comment.id };
+  }
+  if (eventName === "pull_request_review_comment") {
+    return { kind: "reviewComment", id: payload.comment.id };
+  }
+  if (eventName === "pull_request_review") {
+    return { kind: "review", id: payload.review.id };
+  }
+  return null;
+}
+
 // --- Main entry point ---
 //
-// Note: items are skipped for exactly two reasons — the author is in
+// Note: items are skipped for exactly three reasons — the author is in
 // EXCLUDED_AUTHOR_PREFIXES (isExcludedAuthor, currently just
-// `aws-security-agent`), or the content is too short to be worth translating
+// `aws-security-agent`), the content is too short to be worth translating
 // (isTooShortToTranslate, applied inside translateAndUpdate so every item
-// type inherits it — a bare "LGTM" approval review body included).
+// type inherits it — a bare "LGTM" approval review body included), or the
+// body contains the MARKERS.SKIP opt-out (also inside translateAndUpdate,
+// via needsTranslation).
 // Everything else is translated, `github-actions[bot]` included: the Claude
-// reviewer, reviewer-suggester and review-request pings all post under that
-// identity via the default GITHUB_TOKEN, and translating their output is
-// the point of this workflow.
+// reviewer posts under that identity via the default GITHUB_TOKEN, and
+// translating its prose review comments is the point of this workflow.
+// Other `github-actions[bot]` automation (reviewer-suggester, review-request
+// pings, Jira/rebase/deploy bots) opts itself out via MARKERS.SKIP instead,
+// since it's fixed template text or structured data with nothing to
+// translate.
 //
 // Translating bot content does not loop back on itself. We only ever
-// *update* existing items, and the workflow subscribes to `created` /
-// `submitted` events, not `edited`, so our own writes raise no new event —
-// except `pull_request: edited` when we update the PR body, which is gated
-// at the YAML `if:` level via `sender.login`. The
-// `<!-- translated-by-claude -->` marker is the backstop: it prevents
-// re-translating any item we have already touched.
+// *update* existing items, and every one of those updates (in-progress
+// label, final translated body) raises a fresh `edited` event with
+// sender.type == 'Bot'. That self-triggered event is filtered out at the
+// YAML `if:` level (`action != 'edited' || sender.type != 'Bot'`) for every
+// subscribed event type, so it never reaches this script — this also means
+// ANY bot's edit is ignored, not just our own. The `<!-- translated-by-
+// claude -->` marker is the backstop that prevents re-translating any item
+// we have already touched, EXCEPT for the one item a genuine human `edited`
+// event names (see getForceRetranslateTarget) — that one is deliberately
+// retranslated to catch up with the person's change.
 async function main({ github, context, core }) {
   const owner = context.repo.owner;
   const repo = context.repo.repo;
@@ -464,6 +561,8 @@ async function main({ github, context, core }) {
     return;
   }
   console.log(`Processing PR #${prNumber}`);
+
+  const forceTarget = getForceRetranslateTarget(context);
 
   let translated = 0;
   const failures = [];
@@ -487,6 +586,7 @@ async function main({ github, context, core }) {
       await translateAndUpdate(
         prBodyAdapter(github, owner, repo, prNumber, pr),
         core,
+        { forceRetranslate: forceTarget?.kind === "prBody" },
       ),
     );
   }
@@ -498,10 +598,13 @@ async function main({ github, context, core }) {
   );
   for (const comment of issueComments) {
     if (isExcludedAuthor(comment.user?.login)) continue;
+    const forceRetranslate =
+      forceTarget?.kind === "issueComment" && forceTarget.id === comment.id;
     recordResult(
       await translateAndUpdate(
         issueCommentAdapter(github, owner, repo, comment),
         core,
+        { forceRetranslate },
       ),
     );
   }
@@ -513,10 +616,13 @@ async function main({ github, context, core }) {
   );
   for (const comment of reviewComments) {
     if (isExcludedAuthor(comment.user?.login)) continue;
+    const forceRetranslate =
+      forceTarget?.kind === "reviewComment" && forceTarget.id === comment.id;
     recordResult(
       await translateAndUpdate(
         reviewCommentAdapter(github, owner, repo, comment),
         core,
+        { forceRetranslate },
       ),
     );
   }
@@ -538,10 +644,13 @@ async function main({ github, context, core }) {
     if (!review.body) continue;
     if (!ALLOWED_REVIEW_STATES.has(review.state)) continue;
     if (isExcludedAuthor(review.user?.login)) continue;
+    const forceRetranslate =
+      forceTarget?.kind === "review" && forceTarget.id === review.id;
     recordResult(
       await translateAndUpdate(
         reviewAdapter(github, owner, repo, prNumber, review),
         core,
+        { forceRetranslate },
       ),
     );
   }
@@ -576,5 +685,8 @@ module.exports = {
     extractFirstJsonObject,
     buildLiteLlmUrl,
     isExcludedAuthor,
+    getForceRetranslateTarget,
+    safeUpdate,
+    translateAndUpdate,
   },
 };

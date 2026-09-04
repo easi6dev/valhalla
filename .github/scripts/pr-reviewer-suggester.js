@@ -655,7 +655,7 @@ const renderComment = (candidates, randomPicks) => {
     );
   }
 
-  lines.push(COMMENT_MARKER);
+  lines.push(COMMENT_MARKER, '<!-- translation-skip -->');
   return lines.join('\n');
 };
 
