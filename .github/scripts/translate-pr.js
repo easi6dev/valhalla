@@ -55,7 +55,7 @@ const CONFIG = {
   RETRY_COUNT: 1,
   RETRY_DELAY_MS: 2000,
   PER_PAGE: 100,
-  DEFAULT_MODEL: "claude-haiku-4-5-20251001",
+  DEFAULT_MODEL: "global.openai.gpt-5.6-luna",
 };
 
 const MARKERS = {
