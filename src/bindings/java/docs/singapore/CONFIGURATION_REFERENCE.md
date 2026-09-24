@@ -233,7 +233,7 @@ Same limits as auto for taxi/ride-hailing vehicles.
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `max_exclude_locations` | `50` | Max locations to exclude from routing |
+| `max_exclude_locations` | `500` | Max locations to exclude from routing |
 | `max_reachability` | `100` | Max reachability percentage (100%) |
 | `max_radius` | `200` | Max search radius in meters (200m) |
 | `max_timedep_distance` | `500000` | Max distance for time-dependent routing (500km with traffic data) |
