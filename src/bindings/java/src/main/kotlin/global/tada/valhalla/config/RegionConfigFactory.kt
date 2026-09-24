@@ -464,7 +464,7 @@ object RegionConfigFactory {
               "max_shape": 500000,
               "min_resample": 10.0
             },
-            "max_exclude_locations": 50,
+            "max_exclude_locations": 500,
             "max_reachability": 100,
             "max_radius": 200,
             "max_timedep_distance": 500000,
