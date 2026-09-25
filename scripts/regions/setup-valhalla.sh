@@ -56,6 +56,12 @@ SKIP_VALIDATE=false
 SKIP_TEST=false
 SKIP_ELEVATION=false
 
+# Tile-builder image. MUST be built from this repo so its libvalhalla matches the
+# JNI JAR's libvalhalla.so.3 — upstream ghcr.io/valhalla/valhalla:latest drifts
+# and causes SIGBUS at route time. CI publishes only <branch>-latest / <branch>-<sha>.
+# Exported so build-tiles.sh uses the same image.
+export VALHALLA_DOCKER_IMAGE="${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development-latest}"
+
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -107,7 +113,7 @@ Options:
 
 Installation Methods:
   python              Install via pyvalhalla (pip install pyvalhalla)
-  docker              Install via Docker (docker pull valhalla)
+  docker              Install via Docker (pulls $VALHALLA_DOCKER_IMAGE)
 
 Examples:
   # Full automated setup
@@ -197,7 +203,7 @@ check_valhalla_installed() {
 
     # Check docker
     if check_docker &> /dev/null; then
-        if docker image inspect ghcr.io/valhalla/valhalla:latest &> /dev/null; then
+        if docker image inspect "${VALHALLA_DOCKER_IMAGE}" &> /dev/null; then
             echo "docker"
             return 0
         fi
@@ -309,16 +315,17 @@ install_docker_valhalla() {
     fi
 
     print_info "Using Docker: $(docker --version | head -1)"
-    print_info "Pulling Valhalla Docker image..."
+    print_info "Pulling Valhalla Docker image: ${VALHALLA_DOCKER_IMAGE}"
+    print_info "(private ECR — if the pull is denied, first run: aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin ${VALHALLA_DOCKER_IMAGE%%/*})"
 
-    if docker pull ghcr.io/valhalla/valhalla:latest; then
+    if docker pull "${VALHALLA_DOCKER_IMAGE}"; then
         print_success "Docker image pulled successfully"
 
         # Verify installation
-        if docker run --rm ghcr.io/valhalla/valhalla:latest --version &> /dev/null; then
+        if docker run --rm "${VALHALLA_DOCKER_IMAGE}" valhalla_build_tiles --version &> /dev/null; then
             print_success "Valhalla tools verified"
             echo ""
-            print_info "Installed version: $(docker run --rm ghcr.io/valhalla/valhalla:latest --version 2>&1 | head -1)"
+            print_info "Installed version: $(docker run --rm "${VALHALLA_DOCKER_IMAGE}" valhalla_build_tiles --version 2>&1 | head -1)"
         else
             print_error "Installation verification failed"
             exit 1

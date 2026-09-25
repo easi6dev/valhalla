@@ -123,7 +123,7 @@ check_dependencies() {
     local bin="${VALHALLA_BUILD_TILES_BIN:-}"
     # Global so build_tiles() can reference it when constructing docker commands.
     # Override per-cluster via VALHALLA_DOCKER_IMAGE (e.g. US cluster ECR registry).
-    DOCKER_IMAGE="${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development}"
+    DOCKER_IMAGE="${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development-latest}"
     if [[ -n "${bin}" && -x "${bin}" ]]; then
         print_info "Using Valhalla binary: ${bin}"
         # Make it available as valhalla_build_tiles for the rest of the script
@@ -152,7 +152,7 @@ check_dependencies() {
                     ;;
                 "valhalla_build_tiles or docker")
                     echo "  - Valhalla tools: Follow instructions at https://github.com/valhalla/valhalla"
-                    echo "    Or use Docker: docker pull ghcr.io/valhalla/valhalla:latest"
+                    echo "    Or use Docker: docker pull ${DOCKER_IMAGE}  (must match the JAR's libvalhalla version; never ghcr :latest)"
                     ;;
             esac
         done

@@ -63,7 +63,7 @@ valhalla-server/                     # HTTP server (separate repo)
 | `jq` | `sudo apt-get install jq` | Parse `regions.json` config |
 | `wget` | `sudo apt-get install wget` | Download OSM data |
 
-> `build-tiles.sh` uses Docker internally (`633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development`, override with `VALHALLA_DOCKER_IMAGE`) — no native Valhalla installation required.
+> `build-tiles.sh` uses Docker internally (`633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development-latest`, override with `VALHALLA_DOCKER_IMAGE`) — no native Valhalla installation required.
 > Tiles **must** be built by the same Valhalla version as the JAR's `libvalhalla.so`. Do not use the upstream `ghcr.io/valhalla/valhalla:latest` image — a version mismatch crashes the JVM with SIGBUS.
 
 ---
@@ -178,7 +178,7 @@ VALHALLA_ADMIN_DIR=/mnt/data/admin \
 ```
 
 The script:
-- Detects native `valhalla_build_tiles` if installed, otherwise falls back to Docker (`${VALHALLA_DOCKER_IMAGE}`, default: the in-house ECR `valhalla:development` image)
+- Detects native `valhalla_build_tiles` if installed, otherwise falls back to Docker (`${VALHALLA_DOCKER_IMAGE}`, default: the in-house ECR `valhalla:development-latest` image)
 - Builds tiles into `{VALHALLA_TILE_DIR}/singapore/`
 - Builds admin boundaries database into `{VALHALLA_ADMIN_DIR}/admins.sqlite`
 - Writes logs to `{VALHALLA_LOG_DIR}/tile-build-singapore-TIMESTAMP.log`
@@ -215,7 +215,7 @@ docker run --rm \
   -v "$(pwd)/data/admin_data:/valhalla/admin" \
   -v "$(pwd)/data:/valhalla/osm" \
   -v "/tmp:/valhalla/config" \
-  "${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development}" \
+  "${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development-latest}" \
   valhalla_build_tiles \
   -c /valhalla/config/valhalla-sg-docker.json \
   /valhalla/osm/malaysia-singapore-brunei-latest.osm.pbf
@@ -231,7 +231,7 @@ docker run --rm \
   -v "$(pwd)/data/admin_data:/valhalla/admin" \
   -v "$(pwd)/data:/valhalla/osm" \
   -v "/tmp:/valhalla/config" \
-  "${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development}" \
+  "${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development-latest}" \
   valhalla_build_admins \
   -c /valhalla/config/valhalla-sg-docker.json \
   /valhalla/osm/malaysia-singapore-brunei-latest.osm.pbf
