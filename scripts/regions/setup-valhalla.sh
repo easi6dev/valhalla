@@ -122,7 +122,7 @@ Examples:
   # Only download and build (tools already installed)
   ./setup-valhalla.sh --skip-install
 
-For more information, see: docs/singapore/SETUP_GUIDE.md
+For more information, see: src/bindings/java/docs/setup/BUILD_AND_RUN.md
 EOF
 }
 
@@ -609,9 +609,9 @@ main() {
     echo "  actor.close()"
     echo ""
     print_info "For more information, see:"
-    print_info "  - docs/MULTI_REGION_USAGE.md"
-    print_info "  - docs/regions/${REGION}/ (if available)"
-    print_info "  - config/regions/${REGION}/"
+    print_info "  - src/bindings/java/docs/setup/BUILD_AND_RUN.md"
+    print_info "  - src/bindings/java/docs/regions/ADDING_REGIONS.md"
+    print_info "  - config/regions/regions.json"
     echo ""
 }
 
