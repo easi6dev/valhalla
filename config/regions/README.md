@@ -100,19 +100,3 @@ To disable a region (e.g., for maintenance or testing):
 ```
 
 This is runtime-configurable - no code changes required.
-
-## Migration from Environment-Specific Files
-
-**Previously**: Separate files (`regions-dev.json`, `regions-prod.json`, `regions-staging.json`)
-**Now**: Single `regions.json` + `VALHALLA_TILE_DIR` environment variable
-
-**Benefits**:
-- Single source of truth for region definitions
-- Easier maintenance (update once, not three times)
-- No config drift between environments
-- Simpler deployment
-
-**What Changed**:
-- Tile directory paths now use environment variable: `$VALHALLA_TILE_DIR/{region_name}`
-- No more environment detection logic (`VALHALLA_ENV`)
-- All region definitions in one file

@@ -63,7 +63,8 @@ valhalla-server/                     # HTTP server (separate repo)
 | `jq` | `sudo apt-get install jq` | Parse `regions.json` config |
 | `wget` | `sudo apt-get install wget` | Download OSM data |
 
-> Tile generation scripts use Docker (`ghcr.io/valhalla/valhalla:latest`) internally — no native Valhalla installation required.
+> `build-tiles.sh` uses Docker internally (`633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development`, override with `VALHALLA_DOCKER_IMAGE`) — no native Valhalla installation required.
+> Tiles **must** be built by the same Valhalla version as the JAR's `libvalhalla.so`. Do not use the upstream `ghcr.io/valhalla/valhalla:latest` image — a version mismatch crashes the JVM with SIGBUS.
 
 ---
 
@@ -107,7 +108,7 @@ Expected output when tiles are healthy:
 sudo apt-get update
 sudo apt-get install -y jq wget
 # Docker is also required — install from https://docs.docker.com/engine/install/ubuntu/
-# Tile build scripts use ghcr.io/valhalla/valhalla:latest via Docker internally
+# build-tiles.sh uses the in-house ECR image via Docker (override: VALHALLA_DOCKER_IMAGE)
 ```
 
 **Fix Windows line endings** (run once after `git checkout` on Windows — otherwise scripts fail with `bad interpreter: /bin/bash^M`):
@@ -177,7 +178,7 @@ VALHALLA_ADMIN_DIR=/mnt/data/admin \
 ```
 
 The script:
-- Detects native `valhalla_build_tiles` if installed, otherwise falls back to Docker (`ghcr.io/valhalla/valhalla:latest`)
+- Detects native `valhalla_build_tiles` if installed, otherwise falls back to Docker (`${VALHALLA_DOCKER_IMAGE}`, default: the in-house ECR `valhalla:development` image)
 - Builds tiles into `{VALHALLA_TILE_DIR}/singapore/`
 - Builds admin boundaries database into `{VALHALLA_ADMIN_DIR}/admins.sqlite`
 - Writes logs to `{VALHALLA_LOG_DIR}/tile-build-singapore-TIMESTAMP.log`
@@ -197,10 +198,10 @@ mkdir -p data/valhalla_tiles/singapore
 
 # Patch the Singapore config template with container-internal paths
 cat config/regions/singapore/valhalla-singapore.json \
-  | sed 's|"tile_dir": "data/valhalla_tiles/singapore"|"tile_dir": "/valhalla/tiles"|g' \
+  | sed 's|"tile_dir": "data/valhalla_tiles/singapore/latest"|"tile_dir": "/valhalla/tiles"|g' \
   | sed 's|"admin": "data/admin_data/admins.sqlite"|"admin": "/valhalla/admin/admins.sqlite"|g' \
   | sed 's|"timezone": "data/admin_data/timezones.sqlite"|"timezone": "/valhalla/admin/timezones.sqlite"|g' \
-  | sed 's|"tile_extract": "data/valhalla_tiles/singapore.tar"|"tile_extract": "/valhalla/tiles/singapore.tar"|g' \
+  | sed 's|"tile_extract": "data/valhalla_tiles/singapore/latest/singapore.tar"|"tile_extract": "/valhalla/tiles/singapore.tar"|g' \
   | sed 's|"elevation": "data/valhalla_tiles/singapore"|"elevation": "/valhalla/tiles"|g' \
   > /tmp/valhalla-sg-docker.json
 ```
@@ -214,7 +215,7 @@ docker run --rm \
   -v "$(pwd)/data/admin_data:/valhalla/admin" \
   -v "$(pwd)/data:/valhalla/osm" \
   -v "/tmp:/valhalla/config" \
-  ghcr.io/valhalla/valhalla:latest \
+  "${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development}" \
   valhalla_build_tiles \
   -c /valhalla/config/valhalla-sg-docker.json \
   /valhalla/osm/malaysia-singapore-brunei-latest.osm.pbf
@@ -230,7 +231,7 @@ docker run --rm \
   -v "$(pwd)/data/admin_data:/valhalla/admin" \
   -v "$(pwd)/data:/valhalla/osm" \
   -v "/tmp:/valhalla/config" \
-  ghcr.io/valhalla/valhalla:latest \
+  "${VALHALLA_DOCKER_IMAGE:-633107344074.dkr.ecr.ap-southeast-1.amazonaws.com/valhalla:development}" \
   valhalla_build_admins \
   -c /valhalla/config/valhalla-sg-docker.json \
   /valhalla/osm/malaysia-singapore-brunei-latest.osm.pbf
@@ -644,66 +645,75 @@ docker restart valhalla-server-dev
 
 ## Adding a New Region
 
-1. Add the region to `config/regions/regions.json` with `osm_source`, `bounds`, `tile_dir`, `enabled: true`
-2. Run the tile pipeline:
-   ```bash
-   ./scripts/regions/download-region-osm.sh thailand
-   ./scripts/regions/build-tiles.sh thailand --no-elevation
-   ./scripts/regions/validate-tiles.sh thailand
-   ```
-3. Start the server pointing at the new tile directory:
-   ```bash
-   docker run -d \
-     -v /path/to/tiles/thailand:/var/valhalla/tiles:ro \
-     -e VALHALLA_TILE_DIR=/var/valhalla/tiles \
-     -e VALHALLA_REGION=thailand \
-     -p 8080:8080 \
-     valhalla-server:latest
-   ```
+Short version: add the region to `config/regions/regions.json` (`osm_source`,
+`bounds`, `tile_dir`, `enabled: true`), then run the three scripts above against
+its name, then point the server at the new tile directory with
+`VALHALLA_REGION=<region>`.
+
+Full walkthrough — config fields, worked example, custom/metro extracts,
+validation and troubleshooting — is in
+[../regions/ADDING_REGIONS.md](../regions/ADDING_REGIONS.md).
 
 ---
 
 ## Run Tests (Standalone — no server needed)
 
-After Phase 2 completes you can verify the JNI library and tiles work correctly without starting the server:
+### Test suites
+
+All run from `src/bindings/java` via the Gradle wrapper.
 
 ```bash
-cd /mnt/c/Users/<YOUR_USERNAME>/Workspace/valhalla/src/bindings/java
-
-# Run Singapore ride-hailing test suite (11 route scenarios)
-./gradlew test --tests "global.tada.valhalla.singapore.SingaporeRideHaulingTest"
-
-# Run all tests
-./gradlew test
-
-# Run with verbose output (shows route distances and latencies)
-./gradlew test --info
+./gradlew test                                  # full unit suite
+./gradlew test --tests '*IntegrationTest'       # end-to-end (7 tests)
+./gradlew test --tests '*SingaporeRideHaulingTest'
+./gradlew test --tests '*ActorPoolTest'         # pool borrow/return semantics
+./gradlew loadTest                              # registered task, tag-filtered
 ```
 
-Tests use `data/valhalla_tiles/singapore/` by default (the project-root-relative path). To override:
+Key suites: `IntegrationTest`, `LoadTest`, `ActorPoolTest`, `ActorPoolStressTest`,
+`BorrowQueueTest`, `DriverSelectionTest`, `MultiRegionAPITest`,
+`SingaporeRideHaulingTest`, `NewYorkRideHaulingTest`, `TrafficAwareRouterTest`,
+`GeometryMappingServiceTest`, `RouteSmokeCheckJobTest`.
+
+### Benchmarks and load tests
+
+Both scripts live at the **repo root** (`scripts/`), not under `src/bindings/java`:
+
+```bash
+./scripts/run-benchmarks.sh [simple|medium|complex|concurrent|initialization|all]
+./scripts/load-test.sh      [quick|standard|sustained|stress]
+
+./gradlew jmh                                   # JMH directly
+```
+
+Results: `build/reports/jmh/results.json`, `build/reports/load-tests/*.log`,
+`build/reports/tests/test/index.html`.
+
+### Code quality
+
+```bash
+./gradlew detekt        # static analysis -> build/reports/detekt/detekt.html
+./gradlew dokkaHtml     # API docs       -> build/dokka/index.html
+./gradlew fullBuild     # tests + detekt + dokka
+```
+
+Note: `detekt { ignoreFailures = true }`, so detekt reports but does not fail the
+build. There is no ktlint and no jacoco/coverage plugin configured.
+
+### Custom Gradle tasks
+
+`buildNative`, `cleanNative`, `buildReport`, `checkDependencyUpdates`, `fullBuild`, `loadTest`.
+
+Tests resolve tiles from `data/valhalla_tiles/<region>/` by default. To override:
+
 ```bash
 VALHALLA_TILE_DIR=/custom/path ./gradlew test
 ```
 
-View HTML test report in Windows:
+View the HTML test report from WSL:
+
 ```bash
 explorer.exe "$(wslpath -w build/reports/tests/test/index.html)"
-```
-
-Expected test results:
-```
-test 01 - Service Status                              PASSED   (~2ms)
-test 02 - Short Route (Raffles Place → Marina Bay)    PASSED   (~3ms)
-test 03 - Medium Route (Orchard Rd → East Coast)      PASSED   (~5ms)
-test 04 - Long Route (Marina Bay → Changi Airport)    PASSED   (~8ms)
-test 05 - Expressway Route (Jurong → Changi via PIE)  PASSED
-test 06 - Multi-Waypoint Route                        PASSED
-test 07 - Driver Dispatch Matrix (1×5)                PASSED
-test 08 - Motorcycle Routing                          PASSED
-test 09 - Isochrone (10/20/30 min zones)              PASSED
-test 10 - Location API (nearest road lookup)          PASSED
-test 11 - Performance (100 iterations)                PASSED
-BUILD SUCCESSFUL
 ```
 
 ---
@@ -732,63 +742,28 @@ BUILD SUCCESSFUL
 ### Quick cheatsheet
 
 ```bash
-# ── One-time: fix Windows line endings after git checkout on Windows ──────────
-find scripts/ src/bindings/java -name "*.sh" | xargs sed -i 's/\r$//'
+# One-time after a Windows checkout: strip CRLF from shell scripts
+find scripts/ src/bindings/java -name "*.sh" | xargs sed -i 's/
+$//'
 
-# ── Phase 1: Check tiles ──────────────────────────────────────────────────────
+# Phase 1 — tiles
 find data/valhalla_tiles/singapore -name "*.gph" | wc -l   # expect 700+
+./scripts/regions/download-region-osm.sh singapore
+./scripts/regions/build-tiles.sh singapore --no-elevation
 ./scripts/regions/validate-tiles.sh singapore
 
-# ── Phase 1A: Build tiles via script (handles everything automatically) ───────
-./scripts/regions/download-region-osm.sh singapore          # download OSM (~230 MB)
-./scripts/regions/build-tiles.sh singapore --no-elevation   # build tiles (~15-20 min)
+# Phase 2 — JNI + JAR
+cd src/bindings/java && SKIP_APT_INSTALL=1 ./build-jni-bindings.sh
 
-# ── Phase 1A: Build tiles with external paths (CI/staging/separate disk) ──────
-VALHALLA_TILE_DIR=/mnt/data/tiles \
-OSM_DIR=/mnt/data/osm \
-VALHALLA_ADMIN_DIR=/mnt/data/admin \
-  ./scripts/regions/build-tiles.sh singapore --no-elevation
-
-# ── Phase 1B: Build tiles via direct Docker (manual control / non-standard OSM file) ──
-mkdir -p data/valhalla_tiles/singapore
-cat config/regions/singapore/valhalla-singapore.json \
-  | sed 's|"tile_dir": "data/valhalla_tiles/singapore"|"tile_dir": "/valhalla/tiles"|g' \
-  | sed 's|"admin": "data/admin_data/admins.sqlite"|"admin": "/valhalla/admin/admins.sqlite"|g' \
-  | sed 's|"timezone": "data/admin_data/timezones.sqlite"|"timezone": "/valhalla/admin/timezones.sqlite"|g' \
-  | sed 's|"tile_extract": "data/valhalla_tiles/singapore.tar"|"tile_extract": "/valhalla/tiles/singapore.tar"|g' \
-  | sed 's|"elevation": "data/valhalla_tiles/singapore"|"elevation": "/valhalla/tiles"|g' \
-  > /tmp/valhalla-sg-docker.json
-docker run --rm \
-  -v "$(pwd)/data/valhalla_tiles/singapore:/valhalla/tiles" \
-  -v "$(pwd)/data/admin_data:/valhalla/admin" \
-  -v "$(pwd)/data:/valhalla/osm" \
-  -v "/tmp:/valhalla/config" \
-  ghcr.io/valhalla/valhalla:latest \
-  valhalla_build_tiles \
-  -c /valhalla/config/valhalla-sg-docker.json \
-  /valhalla/osm/malaysia-singapore-brunei-latest.osm.pbf
-
-# ── Phase 2A: Build JNI + JAR (WSL) ──────────────────────────────────────────
-cd src/bindings/java
-SKIP_APT_INSTALL=1 ./build-jni-bindings.sh
-
-# ── Phase 2B: Build JNI + JAR (Docker) ───────────────────────────────────────
-docker build --progress=plain -f docker/Dockerfile.prod -t valhalla-jni:latest .
-docker create --name jni-extract valhalla-jni:latest
-docker cp jni-extract:/app/valhalla-jni.jar src/bindings/java/build/libs/valhalla-jni-1.0.0-SNAPSHOT.jar
-docker rm jni-extract
-
-# ── Run tests ─────────────────────────────────────────────────────────────────
-cd src/bindings/java
+# Tests
 ./gradlew test
 
-# ── Phase 4: Run server (Docker) ─────────────────────────────────────────────
-docker run -d --name valhalla-server -p 8080:8080 \
-  -v /mnt/c/Users/<USERNAME>/Workspace/valhalla/data/valhalla_tiles/singapore:/var/valhalla/tiles:ro \
-  -e VALHALLA_TILE_DIR=/var/valhalla/tiles \
-  -e VALHALLA_REGION=singapore \
-  valhalla-server:latest
+# Phase 4 — server
+docker run -d --name valhalla-server -p 8080:8080   -v "$(pwd)/data/valhalla_tiles/singapore:/var/valhalla/tiles:ro"   -e VALHALLA_TILE_DIR=/var/valhalla/tiles   -e VALHALLA_REGION=singapore   valhalla-server:latest
 ```
+
+For external tile paths, direct-Docker tile builds, or the Docker JNI build, see
+Phase 1 and Phase 2 above — those variants are documented once, there.
 
 ---
 
