@@ -172,65 +172,9 @@ val testLocations = mapOf(
 )
 ```
 
-### Adding Malaysia
-
-**Configuration:**
-
-```json
-{
-  "malaysia": {
-    "name": "Malaysia",
-    "enabled": true,
-    "osm_source": "https://download.geofabrik.de/asia/malaysia-singapore-brunei-latest.osm.pbf",
-    "bounds": {
-      "min_lat": 0.85,
-      "max_lat": 7.36,
-      "min_lon": 99.64,
-      "max_lon": 119.27
-    },
-    "tile_dir": "data/valhalla_tiles/malaysia",
-    "default_costing": "auto",
-    "supported_costings": ["auto", "bicycle", "pedestrian", "motorcycle", "bus", "truck"],
-    "costing_options": {
-      "auto": {
-        "maneuver_penalty": 5,
-        "country_crossing_penalty": 600
-      }
-    },
-    "timezone": "Asia/Kuala_Lumpur",
-    "locale": "ms-MY",
-    "currency": "MYR"
-  }
-}
-```
-
-**Build:**
-
-```bash
-./scripts/regions/download-region-osm.sh malaysia
-./scripts/regions/build-tiles.sh malaysia
-./scripts/regions/validate-tiles.sh malaysia
-```
-
-### Popular International Regions
-
-| Region | OSM Source | Est. Size | Build Time |
-|--------|------------|-----------|------------|
-| **Southeast Asia** | | | |
-| Vietnam | `https://download.geofabrik.de/asia/vietnam-latest.osm.pbf` | 1.4 GB | 50 min |
-| Philippines | `https://download.geofabrik.de/asia/philippines-latest.osm.pbf` | 800 MB | 35 min |
-| Indonesia | `https://download.geofabrik.de/asia/indonesia-latest.osm.pbf` | 3.0 GB | 120 min |
-| Cambodia | `https://download.geofabrik.de/asia/cambodia-latest.osm.pbf` | 400 MB | 25 min |
-| **East Asia** | | | |
-| Japan | `https://download.geofabrik.de/asia/japan-latest.osm.pbf` | 6.5 GB | 180 min |
-| South Korea | `https://download.geofabrik.de/asia/south-korea-latest.osm.pbf` | 1.8 GB | 60 min |
-| Taiwan | `https://download.geofabrik.de/asia/taiwan-latest.osm.pbf` | 800 MB | 35 min |
-| **South Asia** | | | |
-| India | `https://download.geofabrik.de/asia/india-latest.osm.pbf` | 4.5 GB | 150 min |
-| Bangladesh | `https://download.geofabrik.de/asia/bangladesh-latest.osm.pbf` | 600 MB | 30 min |
-| **Middle East** | | | |
-| UAE | `https://download.geofabrik.de/asia/gcc-states-latest.osm.pbf` | 500 MB | 28 min |
-| Saudi Arabia | `https://download.geofabrik.de/asia/gcc-states-latest.osm.pbf` | 500 MB | 28 min |
+Thailand above is the complete pattern; any other region follows the same three
+steps (add to `regions.json`, run the pipeline, point the Actor at the key).
+Find sources at <https://download.geofabrik.de/>.
 
 ---
 
@@ -248,7 +192,7 @@ val testLocations = mapOf(
 
 ```json
 {
-  "new-york": {
+  "new_york": {
     "name": "New York",
     "enabled": true,
     "osm_source": "https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf",
@@ -258,7 +202,7 @@ val testLocations = mapOf(
       "min_lon": -79.7624,
       "max_lon": -71.8560
     },
-    "tile_dir": "data/valhalla_tiles/new-york",
+    "tile_dir": "data/valhalla_tiles/new_york",
     "default_costing": "auto",
     "supported_costings": ["auto", "bicycle", "pedestrian", "motorcycle", "bus", "truck", "taxi"],
     "costing_options": {
@@ -282,15 +226,15 @@ val testLocations = mapOf(
 **Build Steps:**
 
 ```bash
-./scripts/regions/download-region-osm.sh new-york
-./scripts/regions/build-tiles.sh new-york
-./scripts/regions/validate-tiles.sh new-york
+./scripts/regions/download-region-osm.sh new_york
+./scripts/regions/build-tiles.sh new_york
+./scripts/regions/validate-tiles.sh new_york
 ```
 
 **Test in Code:**
 
 ```kotlin
-val actor = Actor.createWithExternalTiles("new-york")
+val actor = Actor.createWithExternalTiles("new_york")
 
 // Times Square to Central Park
 val manhattan = actor.route("""
@@ -306,87 +250,6 @@ val manhattan = actor.route("""
 
 actor.close()
 ```
-
-### Adding Denver (Colorado)
-
-**Configuration:**
-
-```json
-{
-  "denver": {
-    "name": "Denver",
-    "enabled": true,
-    "osm_source": "https://download.geofabrik.de/north-america/us/colorado-latest.osm.pbf",
-    "bounds": {
-      "min_lat": 39.6143,
-      "max_lat": 39.9143,
-      "min_lon": -105.1100,
-      "max_lon": -104.6000
-    },
-    "tile_dir": "data/valhalla_tiles/denver",
-    "default_costing": "auto",
-    "supported_costings": ["auto", "bicycle", "pedestrian", "motorcycle", "bus", "truck"],
-    "costing_options": {
-      "bicycle": {
-        "use_hills": 0.4,
-        "avoid_bad_surfaces": 0.25
-      }
-    },
-    "timezone": "America/Denver",
-    "locale": "en-US",
-    "currency": "USD"
-  }
-}
-```
-
-### US States by Size
-
-#### Large States (>500 MB tiles)
-
-| State | OSM Source | Tile Size | Build Time |
-|-------|------------|-----------|------------|
-| California | `https://download.geofabrik.de/north-america/us/california-latest.osm.pbf` | 850 MB | 60 min |
-| Texas | `https://download.geofabrik.de/north-america/us/texas-latest.osm.pbf` | 680 MB | 50 min |
-| Florida | `https://download.geofabrik.de/north-america/us/florida-latest.osm.pbf` | 450 MB | 35 min |
-| New York | `https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf` | 520 MB | 40 min |
-
-#### Medium States (100-500 MB tiles)
-
-| State | OSM Source | Tile Size | Build Time |
-|-------|------------|-----------|------------|
-| Illinois | `https://download.geofabrik.de/north-america/us/illinois-latest.osm.pbf` | 320 MB | 25 min |
-| Pennsylvania | `https://download.geofabrik.de/north-america/us/pennsylvania-latest.osm.pbf` | 340 MB | 26 min |
-| Washington | `https://download.geofabrik.de/north-america/us/washington-latest.osm.pbf` | 250 MB | 20 min |
-| Ohio | `https://download.geofabrik.de/north-america/us/ohio-latest.osm.pbf` | 300 MB | 24 min |
-| Michigan | `https://download.geofabrik.de/north-america/us/michigan-latest.osm.pbf` | 280 MB | 22 min |
-
-#### Small States (<100 MB tiles)
-
-| State | OSM Source | Tile Size | Build Time |
-|-------|------------|-----------|------------|
-| Massachusetts | `https://download.geofabrik.de/north-america/us/massachusetts-latest.osm.pbf` | 150 MB | 13 min |
-| Connecticut | `https://download.geofabrik.de/north-america/us/connecticut-latest.osm.pbf` | 90 MB | 10 min |
-| Colorado | `https://download.geofabrik.de/north-america/us/colorado-latest.osm.pbf` | 180 MB | 15 min |
-| Rhode Island | `https://download.geofabrik.de/north-america/us/rhode-island-latest.osm.pbf` | 50 MB | 8 min |
-
-### Major US Metropolitan Areas
-
-| Metro Area | Use State | Major Cities Included |
-|------------|-----------|----------------------|
-| New York Metro | New York + New Jersey | NYC, Newark, Jersey City |
-| Los Angeles Metro | California | LA, Long Beach, Anaheim |
-| Chicago Metro | Illinois | Chicago, Aurora, Joliet |
-| Dallas-Fort Worth | Texas | Dallas, Fort Worth, Arlington |
-| Houston Metro | Texas | Houston, Sugar Land, The Woodlands |
-| Washington DC Metro | DC + Virginia + Maryland | DC, Arlington, Alexandria |
-| Miami Metro | Florida | Miami, Fort Lauderdale, West Palm Beach |
-| Philadelphia Metro | Pennsylvania | Philadelphia, Camden, Wilmington |
-| Atlanta Metro | Georgia | Atlanta, Sandy Springs, Roswell |
-| Boston Metro | Massachusetts | Boston, Cambridge, Newton |
-| San Francisco Bay | California | SF, Oakland, San Jose |
-| Phoenix Metro | Arizona | Phoenix, Mesa, Scottsdale |
-| Seattle Metro | Washington | Seattle, Tacoma, Bellevue |
-| Denver Metro | Colorado | Denver, Aurora, Lakewood |
 
 ### City vs State: Which to Choose?
 
@@ -483,37 +346,6 @@ osmium extract \
     "description": "NYC Metro - 5 boroughs + Northern NJ"
   }
 }
-```
-
-### Method 2: Custom Build Script
-
-Create `scripts/regions/build-metro-tiles.sh`:
-
-```bash
-#!/bin/bash
-REGION=$1
-OSM_FILE="data/osm/${REGION}-latest.osm.pbf"
-EXTRACT_FILE="data/osm/${REGION}-metro.osm.pbf"
-TILE_DIR="data/valhalla_tiles/${REGION}"
-
-# Get bounds from regions.json
-MIN_LAT=$(jq -r ".regions[\"$REGION\"].bounds.min_lat" config/regions/regions.json)
-MAX_LAT=$(jq -r ".regions[\"$REGION\"].bounds.max_lat" config/regions/regions.json)
-MIN_LON=$(jq -r ".regions[\"$REGION\"].bounds.min_lon" config/regions/regions.json)
-MAX_LON=$(jq -r ".regions[\"$REGION\"].bounds.max_lon" config/regions/regions.json)
-
-# Extract metro area
-osmium extract \
-  --bbox ${MIN_LON},${MIN_LAT},${MAX_LON},${MAX_LAT} \
-  "$OSM_FILE" \
-  -o "$EXTRACT_FILE"
-
-# Build tiles
-valhalla_build_tiles \
-  -c config/valhalla-config.json \
-  "$EXTRACT_FILE"
-
-echo "✅ Metro tiles built: $TILE_DIR"
 ```
 
 ### Bounding Boxes for US Metro Areas
@@ -613,106 +445,23 @@ data/valhalla_tiles/<region>/
 4. Total size reasonable
 5. Sample tile files are readable
 
-**Expected Output:**
-```
-════════════════════════════════════════════════════════════
-  Validating Valhalla Tiles for <region>
-════════════════════════════════════════════════════════════
-
-✅ Tile directory exists: data/valhalla_tiles/<region>/
-✅ Tile structure is valid
-✅ Found 12,450 tile files
-✅ Total size: 1.2 GB
-
-📊 Tile Distribution:
-   Level 0: 145 tiles
-   Level 1: 1,234 tiles
-   Level 2: 11,071 tiles
-
-✅ All validation checks passed!
-```
+The script prints a per-check pass/fail summary and exits non-zero if any check
+fails, so it is safe to use as a build gate.
 
 ### Integration Testing
 
-**Basic Test:**
+Multi-region behaviour is covered by the real suite,
+`src/test/kotlin/global/tada/valhalla/MultiRegionAPITest.kt`:
 
-```kotlin
-import global.tada.valhalla.Actor
-import kotlin.test.*
-
-class RegionIntegrationTest {
-
-    @Test
-    fun `test basic route calculation`() {
-        val actor = Actor.createWithExternalTiles("thailand")
-
-        val result = actor.route("""
-        {
-          "locations": [
-            {"lat": 13.7563, "lon": 100.5018},
-            {"lat": 13.7465, "lon": 100.5351}
-          ],
-          "costing": "auto"
-        }
-        """)
-
-        assertNotNull(result)
-        assertTrue(result.contains("\"trip\""))
-        assertTrue(result.contains("\"legs\""))
-
-        actor.close()
-    }
-
-    @Test
-    fun `test long distance route`() {
-        val actor = Actor.createWithExternalTiles("thailand")
-
-        val result = actor.route("""
-        {
-          "locations": [
-            {"lat": 13.7563, "lon": 100.5018},
-            {"lat": 18.7883, "lon": 98.9853}
-          ],
-          "costing": "auto"
-        }
-        """)
-
-        assertNotNull(result)
-        assertTrue(result.length > 1000)
-
-        actor.close()
-    }
-
-    @Test
-    fun `test multiple costing modes`() {
-        val actor = Actor.createWithExternalTiles("thailand")
-
-        val modes = listOf("auto", "bicycle", "pedestrian")
-
-        modes.forEach { mode ->
-            val result = actor.route("""
-            {
-              "locations": [
-                {"lat": 13.7563, "lon": 100.5018},
-                {"lat": 13.7465, "lon": 100.5351}
-              ],
-              "costing": "$mode"
-            }
-            """)
-
-            assertNotNull(result)
-        }
-
-        actor.close()
-    }
-}
-```
-
-**Run Tests:**
 ```bash
 cd src/bindings/java
-./gradlew test --tests "*RegionIntegrationTest"
+./gradlew test --tests '*MultiRegionAPITest'
 ```
+
+Add cases there for a new region rather than creating a parallel test class.
+`RouteSmokeCheckJob` also runs post-build smoke routes to validate a fresh tile
+set — see [../setup/BUILD_AND_RUN.md](../setup/BUILD_AND_RUN.md) for the full
+list of test suites.
 
 ---
 
@@ -720,161 +469,54 @@ cd src/bindings/java
 
 ### Multi-Region Application
 
+A single `Actor` is **not** thread-safe — it wraps `valhalla::tyr::actor_t`, which
+serves one request at a time. To serve concurrent traffic across several regions,
+hold one `ActorPool` per region and borrow from it per request. See
+[INTEGRATION_GUIDE.md](../setup/INTEGRATION_GUIDE.md#concurrency-actorpool-required-for-concurrent-traffic)
+for pool sizing, backpressure and timeouts.
+
 ```kotlin
-import global.tada.valhalla.Actor
-import java.util.concurrent.ConcurrentHashMap
+import global.tada.valhalla.pool.ActorPool
 
-class MultiRegionRouter(
-    private val regions: List<String>
-) {
-    private val actors = ConcurrentHashMap<String, Actor>()
+class MultiRegionRouter(regions: List<String>) : AutoCloseable {
 
-    init {
-        regions.forEach { region ->
-            try {
-                actors[region] = Actor.createWithExternalTiles(region)
-                println("✅ Loaded region: $region")
-            } catch (e: Exception) {
-                println("❌ Failed to load region: $region - ${e.message}")
-            }
-        }
-    }
+    private val pools: Map<String, ActorPool> =
+        regions.associateWith { ActorPool.forRegion(it) }
 
     fun route(region: String, request: String): String {
-        val actor = actors[region]
+        val pool = pools[region]
             ?: throw IllegalArgumentException("Region $region not loaded")
-        return actor.route(request)
+        return pool.withActor { actor -> actor.route(request) }
     }
 
-    fun detectRegion(lat: Double, lon: Double): String? {
-        // Implement region detection based on coordinates
-        return when {
-            lat in 13.0..21.0 && lon in 97.0..106.0 -> "thailand"
-            lat in 40.4..41.0 && lon in -74.3..-73.7 -> "new-york"
-            // Add more regions...
-            else -> null
-        }
-    }
-
-    fun close() {
-        actors.values.forEach { it.close() }
-    }
-}
-
-// Usage
-fun main() {
-    val router = MultiRegionRouter(
-        regions = listOf("thailand", "singapore", "new-york")
-    )
-
-    val route = router.route("thailand", """
-    {
-      "locations": [
-        {"lat": 13.7563, "lon": 100.5018},
-        {"lat": 13.9218, "lon": 100.6066}
-      ],
-      "costing": "auto"
-    }
-    """)
-
-    router.close()
+    override fun close() = pools.values.forEach { it.close() }
 }
 ```
 
-### Docker Deployment
+Region keys must match the keys in `config/regions/regions.json`
+(currently `singapore`, `thailand`, `new_york`, `new_jersey`, `connecticut`).
 
-**Dockerfile:**
+Sizing note: the budget is per pool. With several regions loaded, apply the
+formula `JVM_Xmx + Σ(poolSize × maxCacheSizeBytes) + headroom ≤ container RAM`
+across *all* pools, not each one in isolation.
 
-```dockerfile
-FROM openjdk:17-slim
+### Deploying a new region
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
+Tile builds for deployed environments run through the production pipeline, not
+the local `scripts/regions/*.sh` path:
 
-# Copy application
-COPY build/libs/valhalla-routing.jar /app/
-WORKDIR /app
+- `deploy/scripts/run-tile-pipeline.sh` — SG cluster
+- `deploy/scripts/run-tile-pipeline-us.sh` — US cluster
+- per-environment settings in `deploy/config/pipeline.*.conf`
 
-# Mount point for tiles
-VOLUME /tiles
+Adding a region to a pipeline (including joining an existing `tile_groups`
+entry, and the `skip_elevation` opt-out) is documented in
+[../../../../../deploy/scripts/lib/README.md](../../../../../deploy/scripts/lib/README.md).
 
-# Environment variables
-ENV VALHALLA_TILE_DIR=/tiles
-ENV JAVA_OPTS="-Xmx4g -Xms1g"
-
-EXPOSE 8080
-
-CMD ["sh", "-c", "java $JAVA_OPTS -jar valhalla-routing.jar"]
-```
-
-**docker-compose.yml:**
-
-```yaml
-version: '3.8'
-
-services:
-  valhalla-routing:
-    build: .
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./data/valhalla_tiles:/tiles:ro
-    environment:
-      - VALHALLA_TILE_DIR=/tiles
-      - ENABLED_REGIONS=thailand,singapore,new-york
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-        reservations:
-          memory: 4G
-```
-
-### Kubernetes Deployment
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: valhalla-routing
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: valhalla-routing
-  template:
-    metadata:
-      labels:
-        app: valhalla-routing
-    spec:
-      containers:
-      - name: valhalla
-        image: your-registry/valhalla-routing:latest
-        ports:
-        - containerPort: 8080
-        env:
-        - name: VALHALLA_TILE_DIR
-          value: "/tiles"
-        - name: ENABLED_REGIONS
-          value: "thailand,singapore,new-york"
-        resources:
-          requests:
-            memory: "4Gi"
-            cpu: "2"
-          limits:
-            memory: "8Gi"
-            cpu: "4"
-        volumeMounts:
-        - name: tiles
-          mountPath: /tiles
-          readOnly: true
-      volumes:
-      - name: tiles
-        persistentVolumeClaim:
-          claimName: valhalla-tiles-pvc
-```
+For container images use the checked-in `docker/Dockerfile.prod` and
+`docker/docker-compose.yml` rather than writing new ones; the server resolves a
+region from `VALHALLA_REGION` and its tiles from `VALHALLA_TILE_DIR`
+(see [../setup/BUILD_AND_RUN.md](../setup/BUILD_AND_RUN.md#phase-3--configure-tile-path)).
 
 ### Update Strategy
 
@@ -1152,8 +794,9 @@ fun main() {
 - **Valhalla Documentation:** https://valhalla.readthedocs.io/
 - **Geofabrik Downloads:** https://download.geofabrik.de/
 - **OSM Wiki:** https://wiki.openstreetmap.org/
-- **Multi-Region API Guide:** [MULTI_REGION_API.md](./MULTI_REGION_API.md)
-- **Region Configuration Guide:** [README.md](./README.md)
+- **Integrating in a service:** [INTEGRATION_GUIDE.md](../setup/INTEGRATION_GUIDE.md)
+- **Build & run:** [BUILD_AND_RUN.md](../setup/BUILD_AND_RUN.md)
+- **Config reference:** [CONFIGURATION.md](../CONFIGURATION.md)
 
 ---
 

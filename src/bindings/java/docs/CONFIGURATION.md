@@ -1,6 +1,14 @@
-# Singapore Valhalla Configuration Reference
+# Valhalla Configuration Reference
 
-This document provides detailed explanations for all configuration parameters used in the Singapore-specific Valhalla setup.
+Explains every Valhalla configuration parameter this project sets: mjolnir, loki,
+thor, meili, service limits and costing profiles.
+
+The parameter meanings apply to any region. The **values** shown are the
+Singapore production tuning (`config/regions/singapore/valhalla-singapore.json`),
+which is the most heavily tuned profile here — treat them as worked examples and
+read `config/regions/regions.json` for what a given region actually uses. The
+`ActorPool` overrides for pooled serving are listed in
+[setup/INTEGRATION_GUIDE.md](setup/INTEGRATION_GUIDE.md#sizing--memory-budget).
 
 ## Table of Contents
 
@@ -20,12 +28,12 @@ Mjolnir handles the routing graph tiles and tile operations.
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `tile_dir` | `data/valhalla_tiles/singapore` | Tile directory path - where routing graph tiles are stored |
+| `tile_dir` | `data/valhalla_tiles/singapore/latest` | Tile directory path - where routing graph tiles are stored |
 | `max_cache_size` | `1073741824` (1GB) | Max tile cache size in bytes - sufficient for Singapore's tiles |
 | `max_concurrent_reader_users` | `4` | Max concurrent readers - adjust based on CPU cores |
 | `admin` | `data/admin_data/admins.sqlite` | Admin database for country/region boundaries |
 | `timezone` | `data/admin_data/timezones.sqlite` | Timezone database |
-| `tile_extract` | `data/valhalla_tiles/singapore.tar` | Tile extract archive (optional, for fast tile loading) |
+| `tile_extract` | `data/valhalla_tiles/singapore/latest/singapore.tar` | Tile extract archive (optional, for fast tile loading) |
 | `reclassify_links` | `true` | Reclassify link roads for better routing |
 | `shortcuts` | `true` | Enable shortcut edges for faster routing |
 | `hierarchy` | `true` | Enable hierarchical routing |

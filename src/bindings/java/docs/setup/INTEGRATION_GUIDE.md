@@ -61,86 +61,47 @@ Publish `valhalla-jni.jar` to your internal Nexus/Artifactory and share it acros
 
 ## Option 1: Direct JNI Integration
 
-### Step 1: Build and Publish JAR
+### Step 1: Build and publish the JAR
+
+Build with `./build-jni-bindings.sh` (see
+[BUILD_AND_RUN.md](BUILD_AND_RUN.md#phase-2--build-jni-library)) — a plain
+`./gradlew build` skips the native symlink step. Then:
 
 ```bash
-# In the Valhalla project root
 cd src/bindings/java
-
-# Build the JAR (includes compilation)
-./gradlew build
-
-# Publish to local Maven repository
-./gradlew publishToMavenLocal
-
-# Or publish to your company's Nexus/Artifactory
-./gradlew publish
+./gradlew publishToMavenLocal   # local development
+./gradlew publish               # Nexus/Artifactory
 ```
 
-The JAR will be published as:
-```
-groupId: global.tada.valhalla
-artifactId: valhalla-jni
-version: 1.0.0-SNAPSHOT
-```
+Published as `global.tada:valhalla-jni:1.0.0-SNAPSHOT`. CI also publishes an
+immutable date version `YYYY.M.D.<run>` — see `Changelog.md`.
 
 ### Step 2: Add Dependency to Your Service
 
 **build.gradle.kts (Gradle):**
 ```kotlin
 dependencies {
-    implementation("global.tada.valhalla:valhalla-jni:1.0.0-SNAPSHOT")
+    implementation("global.tada:valhalla-jni:1.0.0-SNAPSHOT")
 }
 ```
 
 **pom.xml (Maven):**
 ```xml
 <dependency>
-    <groupId>global.tada.valhalla</groupId>
+    <groupId>global.tada</groupId>
     <artifactId>valhalla-jni</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
 ```
 
-### Step 3: Deploy Native Libraries
+### Step 3: Native libraries
 
-The native libraries need to be accessible at runtime. Options:
+Nothing to do. The published JAR bundles `libvalhalla_jni.so`, `libvalhalla.so*`
+and `libprotobuf-lite.so.23` under `lib/linux-amd64/` and extracts them at load
+time. Do not copy `.so` files to `/usr/local/lib` or set `LD_LIBRARY_PATH` — a
+system copy can shadow the bundled one and cause a version mismatch.
 
-#### Option A: Bundle in JAR (Recommended)
-
-Modify `build.gradle.kts` to include native libraries:
-
-```kotlin
-tasks.jar {
-    from("../../../build/src") {
-        include("libvalhalla.so*")
-        into("lib/linux-amd64")
-    }
-    from("../../../build/src/bindings/java/libs/native") {
-        include("libvalhalla_jni.so")
-        into("lib/linux-amd64")
-    }
-}
-```
-
-Then load from classpath in your Actor class.
-
-#### Option B: Deploy to System Library Path
-
-```bash
-# Copy libraries to system path
-sudo cp build/src/libvalhalla.so* /usr/local/lib/
-sudo cp build/src/bindings/java/libs/native/libvalhalla_jni.so /usr/local/lib/
-sudo ldconfig
-```
-
-#### Option C: Set LD_LIBRARY_PATH
-
-Add to your service startup:
-```bash
-export LD_LIBRARY_PATH=/path/to/valhalla/build/src:/path/to/valhalla/build/src/bindings/java/libs/native:$LD_LIBRARY_PATH
-java -jar your-service.jar
-```
+Only `linux-amd64` is shipped today.
 
 ### Step 4: Use in Your Service
 
@@ -149,6 +110,8 @@ java -jar your-service.jar
 import global.tada.valhalla.Actor
 import global.tada.valhalla.config.SingaporeConfig
 
+// Single-threaded illustration of the raw Actor API. For concurrent traffic,
+// inject an ActorPool instead — see "Concurrency: ActorPool" below.
 class RoutingService {
     private val actor: Actor
 
@@ -316,7 +279,7 @@ services:
 **Example (single-threaded / low-concurrency only):**
 ```kotlin
 // OK only if this is never called concurrently. For concurrent traffic, use
-// ActorPool (next section) — a shared Actor under concurrency will crash.
+// ActorPool (below) — a shared Actor under concurrency will crash.
 @Service
 class RoutingService {
     companion object {
@@ -469,8 +432,8 @@ than dropping the pool — the shared mmap'd extract still backs tile reads.
 > state and crashing with a SIGSEGV in `GraphTile::node()`. These `*Async` /
 > `*Suspend` methods are deprecated for this reason.
 
-For concurrent traffic use **`ActorPool`** (next section). It is fully
-thread-safe and gives each in-flight call its own exclusively-held actor.
+For concurrent traffic use **`ActorPool`** (above). It is fully thread-safe and
+gives each in-flight call its own exclusively-held actor.
 
 ```kotlin
 @Service
@@ -485,31 +448,6 @@ class RoutingService(private val pool: ActorPool) {
 }
 ```
 
-### Connection Pooling (REST API)
-
-If using REST API approach:
-
-```kotlin
-@Configuration
-class RestTemplateConfig {
-    @Bean
-    fun restTemplate(): RestTemplate {
-        val factory = SimpleClientHttpRequestFactory()
-        factory.setConnectTimeout(5000)
-        factory.setReadTimeout(10000)
-
-        val connectionManager = PoolingHttpClientConnectionManager()
-        connectionManager.maxTotal = 100
-        connectionManager.defaultMaxPerRoute = 20
-
-        // Use with RestTemplate
-        return RestTemplate(factory)
-    }
-}
-```
-
----
-
 ## Monitoring and Health Checks
 
 ### Health Check Endpoint
@@ -517,12 +455,12 @@ class RestTemplateConfig {
 ```kotlin
 @RestController
 @RequestMapping("/health")
-class HealthController(private val actor: Actor) {
+class HealthController(private val pool: ActorPool) {
 
     @GetMapping
     fun health(): ResponseEntity<HealthStatus> {
         return try {
-            val status = actor.status("{}")
+            val status = pool.withActor { it.status("{}") }
             ResponseEntity.ok(HealthStatus("UP", status))
         } catch (e: Exception) {
             ResponseEntity.status(503)
@@ -540,17 +478,17 @@ data class HealthStatus(val status: String, val details: String?)
 @Service
 class RoutingMetricsService(
     private val meterRegistry: MeterRegistry,
-    private val actor: Actor
+    private val pool: ActorPool
 ) {
     private val routeTimer = meterRegistry.timer("routing.route.duration")
     private val matrixTimer = meterRegistry.timer("routing.matrix.duration")
 
     fun timedRoute(request: String): String {
-        return routeTimer.recordCallable { actor.route(request) }!!
+        return routeTimer.recordCallable { pool.withActor { it.route(request) } }!!
     }
 
     fun timedMatrix(request: String): String {
-        return matrixTimer.recordCallable { actor.matrix(request) }!!
+        return matrixTimer.recordCallable { pool.withActor { it.matrix(request) } }!!
     }
 }
 ```
@@ -602,26 +540,6 @@ ls -la /data/valhalla_tiles/singapore
 ## Code Snippets for Each Use Case
 
 Below are ready-to-use code snippets based on the test suite, covering all common routing scenarios.
-
-### 1. Service Status Check
-
-```kotlin
-// Health check endpoint
-@GetMapping("/health")
-fun checkValhallaHealth(): HealthStatus {
-    return try {
-        val status = actor.status("""{"verbose": true}""")
-        val json = JSONObject(status)
-        HealthStatus(
-            healthy = true,
-            version = json.optString("version"),
-            details = status
-        )
-    } catch (e: Exception) {
-        HealthStatus(healthy = false, error = e.message)
-    }
-}
-```
 
 ### 2. Calculate Basic Route
 
@@ -755,66 +673,12 @@ val optimized = optimizeDeliveryRoute(deliveryStops)
 println("Optimized route: ${optimized.totalDistanceKm} km")
 ```
 
-### 6. Driver Dispatch - Find Closest Drivers
+### 6. Driver dispatch — find closest drivers
 
-> **Prefer `DriverSelection`** (see [Concurrency](#concurrency-actorpool-required-for-concurrent-traffic)).
-> The snippet below is illustrative of the raw matrix call; `DriverSelection.rank`
-> wraps it, handles both matrix response shapes (verbose + slim), excludes
-> unreachable drivers, and is pool-safe.
-
-```kotlin
-// Find nearest N drivers to a pickup location
-fun findClosestDrivers(pickupLat: Double, pickupLon: Double,
-                      driverLocations: List<Location>,
-                      limit: Int = 5): List<DriverETA> {
-    val targetsJson = driverLocations.joinToString(",") {
-        """{"lat": ${it.lat}, "lon": ${it.lon}}"""
-    }
-
-    val request = """
-    {
-      "sources": [{"lat": $pickupLat, "lon": $pickupLon}],
-      "targets": [$targetsJson],
-      "costing": "auto"
-    }
-    """
-
-    val result = actor.matrix(request)
-    val json = JSONObject(result)
-    val matrix = json.getJSONArray("sources_to_targets")
-
-    val driverETAs = mutableListOf<DriverETA>()
-    for (i in 0 until matrix.length()) {
-        val row = matrix.getJSONObject(i)
-        driverETAs.add(
-            DriverETA(
-                driverIndex = i,
-                location = driverLocations[i],
-                etaSeconds = row.getDouble("time").toInt(),
-                distanceKm = row.optDouble("distance", 0.0)
-            )
-        )
-    }
-
-    // Return closest N drivers
-    return driverETAs.sortedBy { it.etaSeconds }.take(limit)
-}
-
-// Usage
-val pickupLocation = Location(1.3048, 103.8318)
-val availableDrivers = listOf(
-    Location(1.3000, 103.8300),
-    Location(1.3100, 103.8350),
-    Location(1.3020, 103.8280),
-    Location(1.3080, 103.8320),
-    Location(1.2980, 103.8290)
-)
-val closest = findClosestDrivers(pickupLocation.lat, pickupLocation.lon,
-                                availableDrivers, limit = 3)
-closest.forEach {
-    println("Driver ${it.driverIndex}: ETA ${it.etaSeconds}s, ${it.distanceKm}km")
-}
-```
+Use `DriverSelection.rank`, documented under
+[Driver dispatch via the matrix helper](#driver-dispatch-via-the-matrix-helper-biggest-throughput-win).
+It issues one matrix call instead of K routes, handles both matrix response
+shapes, excludes unreachable drivers, and is pool-safe.
 
 ### 7. Motorcycle Routing
 
@@ -918,67 +782,16 @@ if (snapped.success) {
 }
 ```
 
-### 10. Complete Service Bean Example
+### 10. Complete service bean
 
-```kotlin
-@Service
-class ValhallaRoutingService(
-    @Value("\${valhalla.tile-dir}") private val tileDir: String
-) {
-    private lateinit var actor: Actor
+The canonical Spring wiring is the `ActorPool` `@Bean` in
+[Concurrency: ActorPool](#concurrency-actorpool-required-for-concurrent-traffic).
+Inject that pool and call `pool.withActor { ... }` inside each service method —
+do not hold a bare `Actor` field on a `@Service`, since a shared Actor under
+concurrent requests is not safe.
 
-    @PostConstruct
-    fun init() {
-        actor = Actor.createSingapore(tileDir)
-    }
-
-    @PreDestroy
-    fun cleanup() {
-        actor.close()
-    }
-
-    // Include all methods above here
-    fun calculateRoute(...) { ... }
-    fun findClosestDrivers(...) { ... }
-    fun calculateIsochrone(...) { ... }
-    // etc.
-}
-
-// Usage in your controller
-@RestController
-class RideHailingController(
-    private val routingService: ValhallaRoutingService
-) {
-
-    @PostMapping("/api/rides/estimate")
-    fun estimateRide(@RequestBody request: RideRequest): RideEstimate {
-        val route = routingService.calculateRoute(
-            request.pickup.lat, request.pickup.lon,
-            request.dropoff.lat, request.dropoff.lon
-        )
-
-        return RideEstimate(
-            distanceKm = route.distanceKm,
-            durationMin = route.durationMin,
-            estimatedFare = calculateFare(route.distanceKm)
-        )
-    }
-
-    @PostMapping("/api/drivers/dispatch")
-    fun dispatchDriver(@RequestBody request: DispatchRequest): DriverAssignment {
-        val drivers = routingService.findClosestDrivers(
-            request.pickup.lat, request.pickup.lon,
-            request.availableDrivers,
-            limit = 1
-        )
-
-        return DriverAssignment(
-            driverId = drivers.first().driverIndex,
-            etaSeconds = drivers.first().etaSeconds
-        )
-    }
-}
-```
+A full worked service, including request construction and response parsing, is in
+`src/test/kotlin/global/tada/valhalla/singapore/SingaporeRideHaulingTest.kt`.
 
 ### Data Classes
 
