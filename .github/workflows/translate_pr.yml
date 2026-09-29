@@ -115,6 +115,13 @@ jobs:
     # (`<!-- translated-by-claude -->`) is the separate mechanism that
     # prevents re-translating every OTHER item we have already completed.
     #
+    # This sender guard is not sufficient for review bodies: a bot's
+    # `pulls.updateReview` was observed arriving as an `edited` event whose
+    # sender is the review's human author (tada-onboarding-service#15). Such
+    # events pass this guard; translate-pr.js (isLastEditedByBot) then checks
+    # who actually made the last edit and does not force a retranslation
+    # when it was a bot.
+    #
     # `issue_comment` also fires for comments on plain (non-PR) issues, so
     # it is gated on `github.event.issue.pull_request` being present —
     # otherwise translate-pr.js treats the issue number as a PR number and

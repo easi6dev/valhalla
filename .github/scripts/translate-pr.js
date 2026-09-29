@@ -254,6 +254,14 @@ async function translateText(text) {
   });
 }
 
+// The prompt tells the LLM to return the input unchanged when it can't
+// confidently identify the language. Writing that no-op back produces the
+// same text on both sides of the <details> block (e.g. Korean + Korean), so
+// callers treat it as "nothing to translate" instead.
+function isEchoOfInput(input, result) {
+  return result.translation.trim() === input.trim();
+}
+
 // --- Body builders ---
 function buildTranslatingBody(original) {
   return `${original}${TRANSLATING_LABEL}`;
@@ -416,6 +424,10 @@ async function safeUpdate(adapter, body, core, context) {
 async function syncFromEditedTranslation(adapter, after, core) {
   try {
     const reverse = await translateText(after.translation);
+    if (isEchoOfInput(after.translation, reverse)) {
+      console.log(`${adapter.label} reverse translation unchanged; skipped.`);
+      return false;
+    }
     const rebuilt = after.isEnglishSourceShape
       ? buildTranslatedBody(reverse.translation, {
           language: "English",
@@ -507,6 +519,15 @@ async function translateAndUpdate(
 
   try {
     const result = await translateText(original);
+    if (isEchoOfInput(original, result)) {
+      // Undo the in-progress label; no marker is written, so the item is
+      // re-evaluated on the next event like a too-short skip.
+      if (adapter.supportsInProgressMarker) {
+        await safeUpdate(adapter, original, core, "unchanged-translation cleanup");
+      }
+      console.log(`${adapter.label} translation unchanged; skipped.`);
+      return false;
+    }
     await adapter.update(buildTranslatedBody(original, result));
     console.log(`${adapter.label} translated.`);
     return true;
@@ -608,17 +629,55 @@ function getForceRetranslateTarget(context) {
   if (payload.action !== "edited") return null;
   const beforeBody = payload.changes?.body?.from;
   if (beforeBody === undefined) return null;
-  if (eventName === "pull_request") return { kind: "prBody", beforeBody };
+  if (eventName === "pull_request") {
+    return { kind: "prBody", nodeId: payload.pull_request.node_id, beforeBody };
+  }
   if (eventName === "issue_comment") {
-    return { kind: "issueComment", id: payload.comment.id, beforeBody };
+    return {
+      kind: "issueComment",
+      id: payload.comment.id,
+      nodeId: payload.comment.node_id,
+      beforeBody,
+    };
   }
   if (eventName === "pull_request_review_comment") {
-    return { kind: "reviewComment", id: payload.comment.id, beforeBody };
+    return {
+      kind: "reviewComment",
+      id: payload.comment.id,
+      nodeId: payload.comment.node_id,
+      beforeBody,
+    };
   }
   if (eventName === "pull_request_review") {
-    return { kind: "review", id: payload.review.id, beforeBody };
+    return {
+      kind: "review",
+      id: payload.review.id,
+      nodeId: payload.review.node_id,
+      beforeBody,
+    };
   }
   return null;
+}
+
+// The YAML sender guard is not enough on its own: a bot's pulls.updateReview
+// was observed arriving as an `edited` event whose sender is the review's
+// human author (tada-onboarding-service#15), so our own write kept
+// force-retranslating the same item in a loop. GraphQL's `editor` reports who
+// actually made the last edit, so a Bot editor means the event is an echo of
+// a bot write, not a human change. Fails closed: if the lookup itself fails,
+// the item is treated as bot-edited — skipping one human edit is far cheaper
+// than risking another loop.
+async function isLastEditedByBot(github, nodeId, core) {
+  try {
+    const { node } = await github.graphql(
+      `query($id: ID!) { node(id: $id) { ... on Comment { editor { __typename } } } }`,
+      { id: nodeId },
+    );
+    return node?.editor?.__typename === "Bot";
+  } catch (e) {
+    core.warning(`Failed to look up last editor of ${nodeId}: ${e.message || String(e)}`);
+    return true;
+  }
 }
 
 // --- Main entry point ---
@@ -644,7 +703,9 @@ function getForceRetranslateTarget(context) {
 // sender.type == 'Bot'. That self-triggered event is filtered out at the
 // YAML `if:` level (`action != 'edited' || sender.type != 'Bot'`) for every
 // subscribed event type, so it never reaches this script — this also means
-// ANY bot's edit is ignored, not just our own. The `<!-- translated-by-
+// ANY bot's edit is ignored, not just our own. That sender guard was observed
+// to miss review-body edits (see isLastEditedByBot), so a forced target is
+// additionally dropped whenever its last editor is a bot. The `<!-- translated-by-
 // claude -->` marker is the backstop that prevents re-translating any item
 // we have already touched, EXCEPT for the one item a genuine human `edited`
 // event names (see getForceRetranslateTarget) — that one is deliberately
@@ -666,7 +727,11 @@ async function main({ github, context, core }) {
   }
   console.log(`Processing PR #${prNumber}`);
 
-  const forceTarget = getForceRetranslateTarget(context);
+  let forceTarget = getForceRetranslateTarget(context);
+  if (forceTarget && (await isLastEditedByBot(github, forceTarget.nodeId, core))) {
+    console.log(`Last edit of ${forceTarget.kind} was made by a bot; not forcing retranslation.`);
+    forceTarget = null;
+  }
 
   let translated = 0;
   const failures = [];
