@@ -13,16 +13,25 @@
 #    https://github.com/easi6dev/tada-server-common-source/actions/workflows/sync.yml
 # ==============================================================================
 
-name: PR Mongo Reviewer
+name: PR DB Reviewer
 
-# Requests a review from the MongoDB owner when a PR changes MongoDB-related
-# source code or mongo config lines in application*.yml (see
-# scripts/pr-mongo-reviewer.js for the detection rules).
+# Requests a review from the DB owner when a PR changes MongoDB-related
+# source code, mongo config lines in application*.yml, or queries against
+# hot RDB tables such as ride_entity (see scripts/pr-db-reviewer.js for the
+# detection rules).
+#
+# Reuses the same org secrets as claude-pr-review-spring-boot.yml
+# (ORG_LITELLM_API_KEY, ORG_LITELLM_ENDPOINT) for the hot-table LLM check.
+# If they are unavailable, a hot-table name match in the query files decides.
+#
+# The hot-table list is read at run time from .github/db-reviewer/hot-tables.json
+# in easi6dev/tada-server-common-source (the single source of truth, not synced),
+# using ORG_GITHUB_ACTION_CI_TOKEN because GITHUB_TOKEN cannot read that repository.
 
 on:
   pull_request:
     # `opened`/`ready_for_review` cover PR creation; `synchronize` re-checks
-    # later pushes so Mongo code added after opening is still routed.
+    # later pushes so DB changes added after opening are still routed.
     types: [opened, ready_for_review, synchronize]
 
 permissions:
@@ -30,9 +39,11 @@ permissions:
   pull-requests: write
 
 jobs:
-  request-mongo-reviewer:
+  request-db-reviewer:
     if: github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    # Self-hosted like translate_pr.yml / claude-pr-review-spring-boot.yml: the LiteLLM
+    # endpoint was unreachable from ubuntu-latest ("fetch failed").
+    runs-on: mvlchain-runner
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -43,8 +54,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "lts/Iron"
-      - name: Run Mongo Reviewer Script
-        run: node ./.github/scripts/pr-mongo-reviewer.js
+      - name: Run DB Reviewer Script
+        run: node ./.github/scripts/pr-db-reviewer.js
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_PULL_REQUEST_NUMBER: ${{ github.event.number }}
@@ -52,3 +63,7 @@ jobs:
           REPO: ${{ github.event.repository.name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          LITELLM_API_KEY: ${{ secrets.ORG_LITELLM_API_KEY }}
+          LITELLM_BASE_URL: ${{ secrets.ORG_LITELLM_ENDPOINT }}
+          LITELLM_MODEL: ${{ secrets.LITELLM_MODEL }}
+          HOT_TABLES_TOKEN: ${{ secrets.ORG_GITHUB_ACTION_CI_TOKEN }}
