@@ -158,7 +158,7 @@ Service limits control the maximum values for various API parameters.
 |-----------|-------|-------------|
 | `max_distance` | `5000000.0` | Max route distance in meters (5000km = covers all ride-hailing scenarios) |
 | `max_locations` | `20` | Max waypoints per route (20 stops for multi-pickup) |
-| `max_matrix_distance` | `400000.0` | Max matrix calculation distance (400km = cross-country in Singapore region) |
+| `max_matrix_distance` | `20000.0` | Max matrix calculation distance (20km = dispatch range; also bounds the search, and a pair farther apart than this rejects the whole matrix) |
 | `max_matrix_location_pairs` | `5000` | Max source-target pairs for matrix (5000 = 1 pickup × 5000 drivers) |
 
 ### Taxi
@@ -169,7 +169,7 @@ Same limits as auto for taxi/ride-hailing vehicles.
 |-----------|-------|
 | `max_distance` | `5000000.0` |
 | `max_locations` | `20` |
-| `max_matrix_distance` | `400000.0` |
+| `max_matrix_distance` | `20000.0` |
 | `max_matrix_location_pairs` | `5000` |
 
 ### Motorcycle
