@@ -22,9 +22,9 @@ tasks.register("setupGitHooks") {
     }
 
     doLast {
-        exec {
+        providers.exec {
             commandLine("git", "config", "core.hooksPath", ".github/hooks")
-        }
+        }.result.get()
         println("Git hooks path set to .github/hooks")
     }
 }
