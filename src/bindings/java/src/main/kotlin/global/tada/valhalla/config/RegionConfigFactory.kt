@@ -414,13 +414,13 @@ object RegionConfigFactory {
             "auto": {
               "max_distance": $maxDistanceMeters,
               "max_locations": 20,
-              "max_matrix_distance": 400000.0,
+              "max_matrix_distance": 20000.0,
               "max_matrix_location_pairs": 5000
             },
             "taxi": {
               "max_distance": $maxDistanceMeters,
               "max_locations": 20,
-              "max_matrix_distance": 400000.0,
+              "max_matrix_distance": 20000.0,
               "max_matrix_location_pairs": 5000
             },
             "motorcycle": {
