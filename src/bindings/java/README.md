@@ -6,10 +6,9 @@ Java/Kotlin JNI bindings for the [Valhalla](https://github.com/valhalla/valhalla
 
 - **Full Valhalla API Support**: Route, matrix, isochrone, map-matching, and more
 - **Modern Kotlin API**: Null-safe, idiomatic Kotlin code with comprehensive KDoc
-- **Multiple Programming Styles**:
-  - Synchronous API for simple use cases
-  - CompletableFuture-based async API for Java compatibility
-  - Kotlin Coroutines support for modern async programming
+- **Safe concurrency**: `ActorPool` borrows one Actor per request, with
+  bounded wait and backpressure (`ActorPoolExhaustedException` -> HTTP 429)
+- **Per-request timeouts**: `(request, timeoutMs)` overloads on the main actions
 - **Type Safety**: Strong typing with exception handling
 - **Resource Management**: AutoCloseable support for proper resource cleanup
 - **Java 17+**: Built with modern Java features
@@ -32,7 +31,7 @@ Java/Kotlin JNI bindings for the [Valhalla](https://github.com/valhalla/valhalla
 
 ```xml
 <dependency>
-    <groupId>global.tada.valhalla</groupId>
+    <groupId>global.tada</groupId>
     <artifactId>valhalla-jni</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
@@ -42,45 +41,31 @@ Java/Kotlin JNI bindings for the [Valhalla](https://github.com/valhalla/valhalla
 
 ```kotlin
 dependencies {
-    implementation("global.tada.valhalla:valhalla-jni:1.0.0-SNAPSHOT")
+    implementation("global.tada:valhalla-jni:1.0.0-SNAPSHOT")
 }
 ```
 
 ## Building from Source
 
-### 1. Build Native Library
-
-First, build the JNI native library using CMake:
-
-```bash
-cd valhalla/src/bindings/java
-cmake -B build -S .
-cmake --build build --config Release
-```
-
-This will generate the native library (`libvalhalla_jni.so`, `libvalhalla_jni.dylib`, or `valhalla_jni.dll` depending on your platform).
-
-### 2. Build Java/Kotlin Library
-
-Build the Java/Kotlin library using Gradle:
+Use the build script — it creates the `libvalhalla.so.3` / `libvalhalla.so`
+symlinks, compiles `libvalhalla_jni.so`, and packages the JAR in one step:
 
 ```bash
-./gradlew build
+cd src/bindings/java
+SKIP_APT_INSTALL=1 ./build-jni-bindings.sh
 ```
 
-Or use the Gradle wrapper on Windows:
+Invoking CMake directly skips the symlink step and produces a JAR that fails at
+runtime with `UnsatisfiedLinkError`.
 
-```cmd
-gradlew.bat build
-```
-
-The built JAR will be located in `build/libs/`.
-
-### 3. Install to Local Maven Repository
+Install to the local Maven repository:
 
 ```bash
 ./gradlew publishToMavenLocal
 ```
+
+Full prerequisites, the Docker build alternative, and tile generation are in
+[docs/setup/BUILD_AND_RUN.md](docs/setup/BUILD_AND_RUN.md).
 
 ## Usage
 
@@ -142,65 +127,44 @@ fun main() {
 }
 ```
 
-### Async Example with CompletableFuture (Java)
+### Concurrent Example (ActorPool)
 
-```java
-import global.tada.valhalla.Actor;
-import global.tada.valhalla.ValhallaException;
-
-public class RouteExample {
-    public static void main(String[] args) {
-        String config = "{ ... }"; // Your config here
-
-        try (Actor actor = new Actor(config)) {
-            String request = "{ ... }"; // Your request here
-
-            actor.routeAsync(request)
-                .thenAccept(result -> System.out.println("Route: " + result))
-                .exceptionally(ex -> {
-                    System.err.println("Error: " + ex.getMessage());
-                    return null;
-                })
-                .join();
-        } catch (ValhallaException e) {
-            System.err.println("Failed to create actor: " + e.getMessage());
-        }
-    }
-}
-```
-
-### Async Example with Kotlin Coroutines
+For any service handling concurrent requests, use `ActorPool` rather than
+sharing a single `Actor`.
 
 ```kotlin
-import global.tada.valhalla.Actor
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import global.tada.valhalla.pool.ActorPool
+import global.tada.valhalla.pool.ActorPoolExhaustedException
 
-fun main() = runBlocking {
-    val config = "{ ... }" // Your config here
+val pool = ActorPool.forRegion("singapore", poolSize = 8)
 
-    Actor(config).use { actor ->
-        val requests = listOf(
-            """{"locations": [...], "costing": "auto"}""",
-            """{"locations": [...], "costing": "pedestrian"}"""
-        )
-
-        // Process multiple requests concurrently
-        val results = requests.map { request ->
-            async {
-                try {
-                    actor.routeSuspend(request)
-                } catch (e: ValhallaException) {
-                    "Error: ${e.message}"
-                }
-            }
-        }.awaitAll()
-
-        results.forEach { println(it) }
+fun handle(request: String): String =
+    try {
+        pool.withActor { actor -> actor.route(request) }
+    } catch (e: ActorPoolExhaustedException) {
+        throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "pool busy")
     }
-}
 ```
+
+From Java, `supplyAsync` returns a `CompletableFuture` backed by the same pool:
+
+```java
+CompletableFuture<String> future =
+    pool.supplyAsync(250L, actor -> actor.route(request));
+```
+
+Close the pool on shutdown — it closes every Actor it owns:
+
+```kotlin
+pool.close()
+```
+
+`withActor` blocks up to `borrowTimeoutMs` (default 250 ms) waiting for a free
+Actor, then throws `ActorPoolExhaustedException` — map that to HTTP 429 so load
+sheds instead of queueing without bound.
+
+Sizing: `JVM_Xmx + poolSize × maxCacheSizeBytes + headroom ≤ container RAM`
+(pooled default cache is 256 MiB per Actor).
 
 ## API Reference
 
@@ -227,9 +191,15 @@ All methods accept a JSON request string and return a JSON response string (exce
 
 ### Async Variants
 
-All methods have async variants:
-- **CompletableFuture**: `methodAsync(request: String): CompletableFuture<String>`
-- **Kotlin Coroutines**: `methodSuspend(request: String): String` (suspend function)
+> **Deprecated.** The `*Async` (CompletableFuture) and `*Suspend` (coroutine)
+> variants are deprecated: they schedule work on a shared pool while the
+> underlying Actor is single-threaded, so concurrent calls race the native
+> workers. Use `ActorPool.withActor { it.route(request) }` instead — see
+> [Thread Safety](#thread-safety).
+
+For a per-request deadline, the synchronous actions take a timeout overload:
+`route`, `matrix`, `optimizedRoute`, `isochrone`, `traceRoute` and
+`traceAttributes` all accept `(request: String, timeoutMs: Long)`.
 
 ## Configuration
 
@@ -273,15 +243,23 @@ try (Actor actor = new Actor(config)) {
 
 ## Performance Tips
 
-1. **Reuse Actor instances**: Creating an Actor is expensive. Reuse it for multiple requests.
-2. **Use async APIs**: For high throughput, use `routeAsync` or `routeSuspend` with concurrent requests.
-3. **Configure thread pools**: CompletableFuture uses the common ForkJoinPool by default. Consider custom executors for better control.
-4. **Batch requests**: Use matrix API instead of multiple individual route requests when appropriate.
+1. **Reuse Actor instances**: Creating an Actor is expensive (it loads tiles). Never create one per request.
+2. **Use `ActorPool` for concurrency**: one Actor per in-flight request. Do not share an Actor across threads.
+3. **Size the pool against RAM**: `JVM_Xmx + poolSize × maxCacheSizeBytes + headroom ≤ container RAM`.
+4. **Set a per-request timeout**: use the `(request, timeoutMs)` overloads so a slow route cannot pin a pooled Actor.
+5. **Batch requests**: use the matrix API instead of many individual route requests where appropriate.
 
 ## Thread Safety
 
-- Each `Actor` instance is thread-safe and can be used from multiple threads concurrently.
-- The underlying C++ actor uses thread-local storage to ensure thread safety.
+**A single `Actor` is NOT thread-safe.** It wraps the native
+`valhalla::tyr::actor_t`, which is single-threaded; calling into one Actor from
+multiple threads races the native workers and can crash the JVM. The deprecated
+`*Async` / `*Suspend` methods on `Actor` are unsafe for the same reason.
+
+Use `ActorPool` for concurrent traffic — see
+[Concurrent Example](#concurrent-example-actorpool) above, and
+[docs/setup/INTEGRATION_GUIDE.md](docs/setup/INTEGRATION_GUIDE.md#concurrency-actorpool-required-for-concurrent-traffic)
+for pool sizing, backpressure and timeouts.
 
 ## Troubleshooting
 
@@ -303,15 +281,18 @@ If `Actor` creation fails:
 
 ## Examples
 
-See the `src/test/kotlin` directory for more examples.
+Worked examples live in the test sources — `SingaporeRideHaulingTest`,
+`NewYorkRideHaulingTest`, `MultiRegionAPITest` and `ActorPoolTest` under
+`src/test/kotlin/global/tada/valhalla/`. Runnable samples are in `examples/` at
+the repo root.
+
+## Documentation
+
+See [docs/README.md](docs/README.md) for the full index.
 
 ## License
 
 This project follows the Valhalla project's license (MIT).
-
-## Contributing
-
-Contributions are welcome! Please submit issues and pull requests to the main Valhalla repository.
 
 ## Links
 
