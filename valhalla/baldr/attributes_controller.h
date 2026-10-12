@@ -59,6 +59,8 @@ constexpr std::string_view kEdgeTransitRouteInfoOperatorName =
 constexpr std::string_view kEdgeTransitRouteInfoOperatorUrl = "edge.transit_route_info.operator_url";
 constexpr std::string_view kEdgeId = "edge.id";
 constexpr std::string_view kEdgeWayId = "edge.way_id";
+constexpr std::string_view kEdgeBeginOsmNodeId = "edge.begin_osm_node_id";
+constexpr std::string_view kEdgeEndOsmNodeId = "edge.end_osm_node_id";
 constexpr std::string_view kEdgeWeightedGrade = "edge.weighted_grade";
 constexpr std::string_view kEdgeMaxUpwardGrade = "edge.max_upward_grade";
 constexpr std::string_view kEdgeMaxDownwardGrade = "edge.max_downward_grade";
@@ -112,6 +114,8 @@ constexpr std::string_view kEdgeStopSignFwd = "edge.stop_sign_forward";
 constexpr std::string_view kEdgeYieldFwd = "edge.yield_sign_forward";
 constexpr std::string_view kEdgeAccessFwd = "edge.access_forward";
 constexpr std::string_view kEdgeLiveSpeedFwd = "edge.live_speed_forward";
+constexpr std::string_view kEdgeFreeflowSpeedFwd = "edge.freeflow_speed_forward";
+constexpr std::string_view kEdgeConstrainedSpeedFwd = "edge.freeflow_speed_forward";
 
 constexpr std::string_view kEdgeSpeedBwd = "edge.speed_backward";
 constexpr std::string_view kEdgeDeadendBwd = "edge.deadend_backward";
@@ -122,6 +126,8 @@ constexpr std::string_view kEdgeStopSignBwd = "edge.stop_sign_backward";
 constexpr std::string_view kEdgeYieldBwd = "edge.yield_sign_backward";
 constexpr std::string_view kEdgeAccessBwd = "edge.access_backward";
 constexpr std::string_view kEdgeLiveSpeedBwd = "edge.live_speed_backward";
+constexpr std::string_view kEdgeFreeflowSpeedBwd = "edge.freeflow_speed_backward";
+constexpr std::string_view kEdgeConstrainedSpeedBwd = "edge.freeflow_speed_backward";
 
 // Node keys
 constexpr std::string_view kNodeIntersectingEdgeBeginHeading = "node.intersecting_edge.begin_heading";
@@ -204,12 +210,32 @@ constexpr std::string_view kShapeAttributesLength = "shape_attributes.length";
 constexpr std::string_view kShapeAttributesSpeed = "shape_attributes.speed";
 constexpr std::string_view kShapeAttributesSpeedLimit = "shape_attributes.speed_limit";
 constexpr std::string_view kShapeAttributesClosure = "shape_attributes.closure";
+constexpr std::string_view kShapeAttributesCongestion = "shape_attributes.congestion";
 
 // Categories
 constexpr std::string_view kNodeCategory = "node.";
 constexpr std::string_view kAdminCategory = "admin.";
 constexpr std::string_view kMatchedCategory = "matched.";
 constexpr std::string_view kShapeAttributesCategory = "shape_attributes.";
+
+// Incident attributes (used by MVT)
+constexpr std::string_view kIncidentId = "incident.id";
+constexpr std::string_view kIncidentType = "incident.type";
+constexpr std::string_view kIncidentDescription = "incident.description";
+constexpr std::string_view kIncidentSubType = "incident.sub_type";
+constexpr std::string_view kIncidentSubTypeDescription = "incident.sub_type_description";
+constexpr std::string_view kIncidentStartTime = "incident.start_time";
+constexpr std::string_view kIncidentEndTime = "incident.end_time";
+constexpr std::string_view kIncidentImpact = "incident.impact";
+constexpr std::string_view kIncidentRoadClosed = "incident.road_closed";
+constexpr std::string_view kIncidentCongestionValue = "incident.congestion_value";
+constexpr std::string_view kIncidentCreationTime = "incident.creation_time";
+constexpr std::string_view kIncidentLongDescription = "incident.long_description";
+constexpr std::string_view kIncidentClearLanes = "incident.clear_lanes";
+constexpr std::string_view kIncidentNumLanesBlocked = "incident.num_lanes_blocked";
+constexpr std::string_view kIncidentLength = "incident.length";
+constexpr std::string_view kIncidentIso31661Alpha2 = "incident.iso_3166_1_alpha2";
+constexpr std::string_view kIncidentIso31661Alpha3 = "incident.iso_3166_1_alpha3";
 
 /**
  * Trip path controller for attributes
