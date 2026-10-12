@@ -71,11 +71,9 @@ void TimeDistanceMatrix::Expand(GraphReader& graphreader,
 
   const DirectedEdge* opp_pred_edge = nullptr;
   if (!FORWARD) {
-    opp_pred_edge = tile->directededge(nodeinfo->edge_index());
-    for (uint32_t i = 0; i < nodeinfo->edge_count(); i++, opp_pred_edge++) {
-      if (opp_pred_edge->localedgeidx() == pred.opp_local_idx()) {
-        break;
-      }
+    opp_pred_edge = graphreader.GetOpposingEdge(pred.edgeid());
+    if (opp_pred_edge == nullptr) {
+      return;
     }
   }
 
@@ -111,7 +109,7 @@ void TimeDistanceMatrix::Expand(GraphReader& graphreader,
     if (FORWARD) {
       if (!costing_->Allowed(directededge, is_dest, pred, tile, edgeid, offset_time.local_time,
                              nodeinfo->timezone(), restriction_idx, destonly_restriction_mask) ||
-          costing_->Restricted(directededge, pred, edgelabels_, tile, edgeid, true, nullptr,
+          costing_->Restricted(directededge, pred, edgelabels_, tile, edgeid, true, &edgestatus_,
                                offset_time.local_time, nodeinfo->timezone())) {
         continue;
       }
@@ -119,7 +117,7 @@ void TimeDistanceMatrix::Expand(GraphReader& graphreader,
       if (!costing_->AllowedReverse(directededge, pred, opp_edge, t2, opp_edge_id,
                                     offset_time.local_time, nodeinfo->timezone(), restriction_idx,
                                     destonly_restriction_mask) ||
-          (costing_->Restricted(directededge, pred, edgelabels_, tile, edgeid, false, nullptr,
+          (costing_->Restricted(directededge, pred, edgelabels_, tile, edgeid, false, &edgestatus_,
                                 offset_time.local_time, nodeinfo->timezone()))) {
         continue;
       }
@@ -221,6 +219,7 @@ bool TimeDistanceMatrix::ComputeMatrix(Api& request,
 
     // Construct adjacency list. Set bucket size and cost range based on DynamicCost.
     adjacencylist_.reuse(0.0f, current_cost_threshold_, bucketsize, &edgelabels_);
+    current_cost_threshold_ = std::numeric_limits<float>::max();
 
     // Initialize the origin and set the available destination edges
     settled_count_ = 0;
@@ -281,6 +280,11 @@ bool TimeDistanceMatrix::ComputeMatrix(Api& request,
         FormTimeDistanceMatrix(request, graphreader, FORWARD, origin_index, origin.date_time(),
                                time_info.timezone_index, dest_edge_ids);
         break;
+      }
+
+      // Don't expand beyond max_matrix_distance of road distance
+      if (pred.path_distance() > max_matrix_distance) {
+        continue;
       }
 
       // Expand forward from the end node of the predecessor edge.
