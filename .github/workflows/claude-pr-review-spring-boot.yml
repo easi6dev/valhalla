@@ -42,7 +42,7 @@ jobs:
       previous_feedback: ${{ steps.feedback.outputs.previous_feedback }}
       changed_files: ${{ steps.files.outputs.changed_files }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -210,7 +210,7 @@ jobs:
     if: needs.check-ignore.outputs.skip_review == 'false'
     runs-on: mvlchain-runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -251,7 +251,7 @@ jobs:
             echo "${EOF_MARKER}"
           } >> "$GITHUB_ENV"
 
-      - uses: anthropics/claude-code-action@v1.0.73
+      - uses: anthropics/claude-code-action@v1.0.74
         env:
           ANTHROPIC_BASE_URL: ${{ secrets.ORG_LITELLM_ENDPOINT }}
           CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: 1
@@ -275,7 +275,7 @@ jobs:
       needs.check-ignore.outputs.has_sql_changes == 'true'
     runs-on: mvlchain-runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -311,7 +311,7 @@ jobs:
             echo "${EOF_MARKER}"
           } >> "$GITHUB_ENV"
 
-      - uses: anthropics/claude-code-action@v1.0.73
+      - uses: anthropics/claude-code-action@v1.0.74
         env:
           ANTHROPIC_BASE_URL: ${{ secrets.ORG_LITELLM_ENDPOINT }}
           CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: 1
@@ -334,7 +334,7 @@ jobs:
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.user.type != 'Bot')
     runs-on: mvlchain-runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -345,7 +345,7 @@ jobs:
           fi
           gh --version
 
-      - uses: anthropics/claude-code-action@v1.0.73
+      - uses: anthropics/claude-code-action@v1.0.74
         env:
           ANTHROPIC_BASE_URL: ${{ secrets.ORG_LITELLM_ENDPOINT }}
           CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: 1

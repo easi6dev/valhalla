@@ -33,7 +33,7 @@ jobs:
       pull-requests: write
     steps:
     - name: Checkout the latest code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         ref: development
         fetch-depth: 0
@@ -149,7 +149,7 @@ jobs:
       pull-requests: write
     steps:
     - name: Checkout the latest code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         ref: test
         fetch-depth: 0
@@ -262,7 +262,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the latest code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: staging
           fetch-depth: 0

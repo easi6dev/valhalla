@@ -147,12 +147,12 @@ jobs:
       )
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Translate all PR content
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           LITELLM_API_KEY: ${{ secrets.ORG_LITELLM_API_KEY }}
           LITELLM_MODEL: ${{ secrets.LITELLM_MODEL }}

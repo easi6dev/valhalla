@@ -46,14 +46,15 @@ jobs:
     runs-on: mvlchain-runner
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           sparse-checkout: |
             .github
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "lts/Iron"
+          node-version: "lts/Krypton"
+          package-manager-cache: false
       - name: Run DB Reviewer Script
         run: node ./.github/scripts/pr-db-reviewer.js
         env:
