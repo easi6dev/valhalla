@@ -1,4 +1,7 @@
-"""Apply LTA's temporary AMK Ave 3 realignment at AMK Hub (DHL-32612) to an SG OSM extract when AMK_REALIGNMENT=on."""
+"""Apply LTA's temporary AMK Ave 3 realignment at AMK Hub (DHL-32612) to an SG OSM extract when AMK_REALIGNMENT=on.
+
+Keep identical to tada-graphhopper-import/scripts/modify_osm_for_sg.py and valhalla/deploy/scripts/modify_osm_for_sg.py.
+"""
 import os
 import shutil
 import sys
@@ -30,6 +33,8 @@ LOOP = 591264491
 LOOP_EAST, LOOP_WEST = 5644580997, 5644581001
 WESTBOUND, EXIT_SIGNAL = 74671109, 5644580998
 CARPARK_EXIT, CARPARK_JUNCTION, EASTBOUND_AFTER_CARPARK = 646141627, 435031680, 630488641
+
+ACCESS_KEYS = ("access", "vehicle", "motor_vehicle", "motorcar", "taxi", "psv", "oneway:taxi", "oneway:psv", "lanes:psv")
 
 NEW_EXIT_WAY = 2100000001
 NEW_RESTRICTION = 2100000001
@@ -69,9 +74,10 @@ class AmkRewriter(osmium.SimpleHandler):
             self.errors.append(f"way {w.id} already exists; the patch ids collide with real data")
         if w.id in BUS_ONLY:
             self.seen.add(("w", w.id))
-            if tags.get("motor_vehicle") == "no":
-                self.errors.append(f"way {w.id} is already closed to motor vehicles; OSM may already show the realignment")
-            self.writer.add_way(w.replace(tags={**tags, "motor_vehicle": "no", "bus": "designated"}))
+            access_tags = sorted(k for k in tags if any(k == p or k.startswith(p + ":") for p in ACCESS_KEYS))
+            if access_tags:
+                self.errors.append(f"way {w.id} already has access tags {access_tags}; OSM may already show the realignment or reopen it")
+            self.writer.add_way(w.replace(tags={**tags, "motor_vehicle": "no", "motorcar": "no", "taxi": "no", "bus": "designated"}))
             return
         if w.id in (LOOP, WESTBOUND, CARPARK_EXIT, EASTBOUND_AFTER_CARPARK):
             self.seen.add(("w", w.id))
