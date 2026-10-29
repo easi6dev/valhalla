@@ -4,9 +4,6 @@ import shutil
 import sys
 import time
 
-import osmium
-from osmium.osm import mutable
-
 time_start = time.time()
 
 if len(sys.argv) != 3:
@@ -24,6 +21,9 @@ if mode == "off":
     shutil.copyfile(OSM_FILE, OUTPUT_FILE)
     print(f"AMK Ave 3 realignment not applied (AMK_REALIGNMENT=off); copied {OSM_FILE} to {OUTPUT_FILE}")
     sys.exit(0)
+
+import osmium
+from osmium.osm import mutable
 
 BUS_ONLY = [651971809, 174886145, 633162286, 654724769, 174049653, 788794245]
 LOOP = 591264491

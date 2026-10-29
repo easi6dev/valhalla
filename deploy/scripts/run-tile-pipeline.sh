@@ -151,6 +151,11 @@ phase_patch_osm() {
         return 0
     fi
 
+    if [[ "${AMK_REALIGNMENT:-off}" == "off" ]]; then
+        log_info "AMK_REALIGNMENT=off; using ${OSM_FILE} as is"
+        return 0
+    fi
+
     local out="${OSM_DIR}/${REGION}-patched.osm.pbf"
     if [[ "${DRY_RUN}" == true ]]; then
         log_dry "Would patch: ${OSM_FILE} → ${out}"
