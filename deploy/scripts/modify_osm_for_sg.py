@@ -1,7 +1,4 @@
-"""Apply LTA's temporary AMK Ave 3 realignment at AMK Hub (DHL-32612) to an SG OSM extract when AMK_REALIGNMENT=on.
-
-Keep identical to tada-graphhopper-import/scripts/modify_osm_for_sg.py and valhalla/deploy/scripts/modify_osm_for_sg.py.
-"""
+"""Apply LTA's temporary AMK Ave 3 realignment at AMK Hub (DHL-32612) to an SG OSM extract when AMK_REALIGNMENT=on."""
 import os
 import shutil
 import sys
