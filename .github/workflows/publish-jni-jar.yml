@@ -4,10 +4,10 @@ name: Publish JNI JAR
 # or manually via workflow_dispatch.
 #
 # Branch strategy:
-#   dist     -> release  (artifactId: valhalla-jni, version: 1.0.0)
-#   snapshot -> snapshot (artifactId: valhalla-jni, version: 1.0.0-SNAPSHOT)
+#   dist     -> release  (artifactId: valhalla-jni)
+#   snapshot -> snapshot (artifactId: valhalla-jni, version: YYYY.M.D.<run_number>-snapshot)
 #
-# Note: workflow_dispatch from any other branch falls back to snapshot routing.
+# Only dist and snapshot publish; runs on any other branch are skipped.
 #
 # Publishing strategy:
 #   The .so files are gitignored (they are large binary artifacts built inside
@@ -50,15 +50,16 @@ env:
 
 jobs:
   publish:
-    # Allow manual triggers (workflow_dispatch) from any branch.
-    # For automatic triggers (workflow_run): only proceed when:
-    #   1. The upstream Build valhalla Image workflow succeeded, AND
-    #   2. It ran on 'snapshot' or a 'dist*' branch.
+    # Only proceed on 'snapshot' or a 'dist*' branch:
+    #   - manual triggers (workflow_dispatch) run from one of them, OR
+    #   - automatic triggers (workflow_run) where the upstream Build valhalla
+    #     Image workflow succeeded on one of them.
     # Branch check is done here (not in the trigger's 'branches' filter) because
     # GitHub's workflow_run 'branches' filter is evaluated against the default
     # branch and silently drops events — runtime 'if' is the reliable alternative.
     if: >
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.ref_name == 'snapshot' || startsWith(github.ref_name, 'dist'))) ||
       (github.event.workflow_run.conclusion == 'success' &&
        (github.event.workflow_run.head_branch == 'snapshot' ||
         startsWith(github.event.workflow_run.head_branch, 'dist')))
@@ -69,6 +70,7 @@ jobs:
       # -- 1. Checkout ----------------------------------------------------------
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       # -- 2. Resolve branch name -----------------------------------------------
@@ -90,7 +92,7 @@ jobs:
       # artifactId is always valhalla-jni (consistent single name).
       # Every build publishes a date version: YYYY.M.D.<run_number>.
       #   dist branches    -> YYYY.M.D.<run_number>          (release, immutable)
-      #   snapshot/others  -> YYYY.M.D.<run_number>          (immutable)
+      #   snapshot         -> YYYY.M.D.<run_number>-snapshot (immutable)
       #                    +  X.Y.Z-SNAPSHOT                 (mutable, back-compat)
       #
       # Dist branches deliberately do NOT publish a fixed X.Y.Z. GHP treats release
@@ -119,6 +121,7 @@ jobs:
           else
             # SNAPSHOT is mutable in GHP, so re-publishing is always safe.
             VERSION="${BASE_VERSION}-SNAPSHOT"
+            DATE_VERSION="${DATE_VERSION}-snapshot"
           fi
 
           echo "artifact_id=valhalla-jni"      >> "$GITHUB_OUTPUT"
