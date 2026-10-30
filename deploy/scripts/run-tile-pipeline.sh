@@ -73,10 +73,10 @@ readonly COMPLETION_LABEL="Pipeline completed successfully — "
 readonly EFS_SKIP_NOTE=" (local dev)"
 
 # Execution order (verbatim from the original main()) and the --skip-build subset.
-readonly PHASES=(phase_osm phase_build phase_extract phase_validate
+readonly PHASES=(phase_osm phase_patch_osm phase_build phase_extract phase_validate
                  phase_s3_sync phase_swap_latest phase_cleanup
                  geometry_mapping phase_efs_sync)
-readonly BUILD_PHASES=(phase_osm phase_build)
+readonly BUILD_PHASES=(phase_osm phase_patch_osm phase_build)
 
 # Region-specific default flags.
 set_region_defaults() {
@@ -138,6 +138,34 @@ phase_osm() {
         _download_osm
 
     log_ok "OSM phase complete"
+}
+
+# ---------------------------------------------------------------------------
+# Phase 1.5: Patch OSM (Singapore only)
+# ---------------------------------------------------------------------------
+phase_patch_osm() {
+    set_phase "Phase 1.5: Patch OSM"
+
+    if [[ "${REGION}" != "singapore" ]]; then
+        log_info "No OSM patch for '${REGION}'; skipping"
+        return 0
+    fi
+
+    if [[ "${AMK_REALIGNMENT:-off}" == "off" ]]; then
+        log_info "AMK_REALIGNMENT=off; using ${OSM_FILE} as is"
+        return 0
+    fi
+
+    local out="${OSM_DIR}/${REGION}-patched.osm.pbf"
+    if [[ "${DRY_RUN}" == true ]]; then
+        log_dry "Would patch: ${OSM_FILE} → ${out}"
+        OSM_FILE="${out}"
+        return 0
+    fi
+
+    AMK_REALIGNMENT="${AMK_REALIGNMENT:-off}" python3 "${SCRIPT_DIR}/modify_osm_for_sg.py" "${OSM_FILE}" "${out}"
+    OSM_FILE="${out}"
+    log_ok "OSM patch complete"
 }
 
 # ---------------------------------------------------------------------------
