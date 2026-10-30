@@ -4,10 +4,9 @@ name: Publish JNI JAR
 # or manually via workflow_dispatch.
 #
 # Branch strategy:
-#   dist     -> release  (artifactId: valhalla-jni, version: 1.0.0)
-#   snapshot -> snapshot (artifactId: valhalla-jni-snapshot, version: 1.0.0-SNAPSHOT)
+#   dist     -> release  (artifactId: valhalla-jni)
 #
-# Note: workflow_dispatch from any other branch falls back to snapshot routing.
+# Only dist branches publish; runs on any other branch are skipped.
 #
 # Publishing strategy:
 #   The .so files are gitignored (they are large binary artifacts built inside
@@ -50,18 +49,17 @@ env:
 
 jobs:
   publish:
-    # Allow manual triggers (workflow_dispatch) from any branch.
-    # For automatic triggers (workflow_run): only proceed when:
-    #   1. The upstream Build valhalla Image workflow succeeded, AND
-    #   2. It ran on 'snapshot' or a 'dist*' branch.
+    # Only proceed on a 'dist*' branch:
+    #   - manual triggers (workflow_dispatch) run from a 'dist*' branch, OR
+    #   - automatic triggers (workflow_run) where the upstream Build valhalla
+    #     Image workflow succeeded on a 'dist*' branch.
     # Branch check is done here (not in the trigger's 'branches' filter) because
     # GitHub's workflow_run 'branches' filter is evaluated against the default
     # branch and silently drops events — runtime 'if' is the reliable alternative.
     if: >
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'dist')) ||
       (github.event.workflow_run.conclusion == 'success' &&
-       (github.event.workflow_run.head_branch == 'snapshot' ||
-        startsWith(github.event.workflow_run.head_branch, 'dist')))
+       startsWith(github.event.workflow_run.head_branch, 'dist'))
 
     runs-on: mvlchain-runner-large
 
@@ -88,7 +86,7 @@ jobs:
           echo "safe=${BRANCH_SAFE}"  >> "$GITHUB_OUTPUT"
 
       # -- 3. Resolve publish metadata ------------------------------------------
-      # dist publishes valhalla-jni; every other branch publishes valhalla-jni-snapshot.
+      # artifactId is always valhalla-jni (consistent single name).
       # Every build publishes a date version: YYYY.M.D.<run_number>.
       #   dist branches    -> YYYY.M.D.<run_number>          (release, immutable)
       #   snapshot/others  -> YYYY.M.D.<run_number>          (immutable)
@@ -117,21 +115,17 @@ jobs:
           if [[ "${BRANCH}" == dist* ]]; then
             # Release channel: the date version is the only artifact.
             VERSION=""
-            REPO_POSTFIX=""
           else
             # SNAPSHOT is mutable in GHP, so re-publishing is always safe.
             VERSION="${BASE_VERSION}-SNAPSHOT"
-            REPO_POSTFIX="-snapshot"
           fi
 
-          # Consumed by the `gpr` publication in build.gradle.kts.
-          echo "REPO_POSTFIX=${REPO_POSTFIX}"   >> "$GITHUB_ENV"
-          echo "artifact_id=valhalla-jni${REPO_POSTFIX}" >> "$GITHUB_OUTPUT"
+          echo "artifact_id=valhalla-jni"      >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}"             >> "$GITHUB_OUTPUT"
           echo "date_version=${DATE_VERSION}"   >> "$GITHUB_OUTPUT"
-          echo "Resolved: valhalla-jni${REPO_POSTFIX}:${DATE_VERSION} (branch=${BRANCH})"
+          echo "Resolved: valhalla-jni:${DATE_VERSION} (branch=${BRANCH})"
           if [[ -n "${VERSION}" ]]; then
-            echo "Also publishing mutable alias: valhalla-jni${REPO_POSTFIX}:${VERSION}"
+            echo "Also publishing mutable alias: valhalla-jni:${VERSION}"
           else
             echo "Release channel: publishing date version only (no fixed X.Y.Z)."
           fi
