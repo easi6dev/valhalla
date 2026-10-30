@@ -5,7 +5,7 @@ name: Publish JNI JAR
 #
 # Branch strategy:
 #   dist     -> release  (artifactId: valhalla-jni, version: 1.0.0)
-#   snapshot -> snapshot (artifactId: valhalla-jni, version: 1.0.0-SNAPSHOT)
+#   snapshot -> snapshot (artifactId: valhalla-jni-snapshot, version: 1.0.0-SNAPSHOT)
 #
 # Note: workflow_dispatch from any other branch falls back to snapshot routing.
 #
@@ -69,6 +69,7 @@ jobs:
       # -- 1. Checkout ----------------------------------------------------------
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       # -- 2. Resolve branch name -----------------------------------------------
@@ -87,7 +88,7 @@ jobs:
           echo "safe=${BRANCH_SAFE}"  >> "$GITHUB_OUTPUT"
 
       # -- 3. Resolve publish metadata ------------------------------------------
-      # artifactId is always valhalla-jni (consistent single name).
+      # dist publishes valhalla-jni; every other branch publishes valhalla-jni-snapshot.
       # Every build publishes a date version: YYYY.M.D.<run_number>.
       #   dist branches    -> YYYY.M.D.<run_number>          (release, immutable)
       #   snapshot/others  -> YYYY.M.D.<run_number>          (immutable)
@@ -116,17 +117,21 @@ jobs:
           if [[ "${BRANCH}" == dist* ]]; then
             # Release channel: the date version is the only artifact.
             VERSION=""
+            REPO_POSTFIX=""
           else
             # SNAPSHOT is mutable in GHP, so re-publishing is always safe.
             VERSION="${BASE_VERSION}-SNAPSHOT"
+            REPO_POSTFIX="-snapshot"
           fi
 
-          echo "artifact_id=valhalla-jni"      >> "$GITHUB_OUTPUT"
+          # Consumed by the `gpr` publication in build.gradle.kts.
+          echo "REPO_POSTFIX=${REPO_POSTFIX}"   >> "$GITHUB_ENV"
+          echo "artifact_id=valhalla-jni${REPO_POSTFIX}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}"             >> "$GITHUB_OUTPUT"
           echo "date_version=${DATE_VERSION}"   >> "$GITHUB_OUTPUT"
-          echo "Resolved: valhalla-jni:${DATE_VERSION} (branch=${BRANCH})"
+          echo "Resolved: valhalla-jni${REPO_POSTFIX}:${DATE_VERSION} (branch=${BRANCH})"
           if [[ -n "${VERSION}" ]]; then
-            echo "Also publishing mutable alias: valhalla-jni:${VERSION}"
+            echo "Also publishing mutable alias: valhalla-jni${REPO_POSTFIX}:${VERSION}"
           else
             echo "Release channel: publishing date version only (no fixed X.Y.Z)."
           fi

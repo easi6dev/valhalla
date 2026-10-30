@@ -322,7 +322,7 @@ publishing {
 
     publications {
         register("gpr", MavenPublication::class) {
-            artifactId = "valhalla-jni"
+            artifactId = "valhalla-jni${System.getenv("REPO_POSTFIX") ?: ""}"
             from(components["java"])
             // sourcesJar is auto-created by java { withSourcesJar() } above
         }
