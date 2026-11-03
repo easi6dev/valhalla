@@ -509,7 +509,7 @@ TEST(Standalone, PbfOut) {
   EXPECT_EQ(response.trip().routes(0).matched_points_size(), 4);
   for (auto it = response.trip().routes(0).matched_points().begin();
        it != response.trip().routes(0).matched_points().end(); ++it) {
-    EXPECT_TRUE(it->has_distance_from_trace_point());
+    EXPECT_TRUE(it->has_distance_from_trace_point_case());
     EXPECT_NEAR(it->distance_from_trace_point(), 10., 0.5);
   }
 }
