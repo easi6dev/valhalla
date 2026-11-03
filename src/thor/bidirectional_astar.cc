@@ -249,17 +249,10 @@ inline bool BidirectionalAStar::ExpandInner(baldr::GraphReader& graphreader,
   const uint64_t localtime = time_info.valid ? time_info.local_time : 0;
   uint8_t restriction_idx = kInvalidRestriction;
   uint8_t destonly_restriction_mask = pred.destonly_access_restr_mask();
+  bool edge_destonly = false;
   if (FORWARD) {
-    // Why is is_dest false?
-    // We have to consider next cases:
-    //  1) At least one step of reverse search was done -> forward search will never reach the
-    //  destination edge. 2) There were no steps of the reverse search -> the destination edge is a
-    //  connection edge.
-    // We can set is_dest incorrectly in the second case, but it is the rare case.
-    // The result path will be correct, because there are cosing.Allowed calls inside recost_forward
-    // function in second time.
-    if (!costing_->Allowed(meta.edge, false, pred, tile, meta.edge_id, localtime,
-                           time_info.timezone_index, restriction_idx, destonly_restriction_mask) ||
+    if (!costing_->Allowed(meta.edge, pred, tile, meta.edge_id, localtime, time_info.timezone_index,
+                           restriction_idx, destonly_restriction_mask, &edge_destonly) ||
         costing_->Restricted(meta.edge, pred, edgelabels_forward_, tile, meta.edge_id, true,
                              &edgestatus_forward_, localtime, time_info.timezone_index)) {
       return false;
@@ -267,7 +260,7 @@ inline bool BidirectionalAStar::ExpandInner(baldr::GraphReader& graphreader,
   } else {
     if (!costing_->AllowedReverse(meta.edge, pred, opp_edge, t2, opp_edge_id, localtime,
                                   time_info.timezone_index, restriction_idx,
-                                  destonly_restriction_mask) ||
+                                  destonly_restriction_mask, &edge_destonly) ||
         costing_->Restricted(meta.edge, pred, edgelabels_reverse_, tile, meta.edge_id, false,
                              &edgestatus_reverse_, localtime, time_info.timezone_index)) {
       return false;
@@ -284,11 +277,12 @@ inline bool BidirectionalAStar::ExpandInner(baldr::GraphReader& graphreader,
   auto reader_getter = [&graphreader]() { return baldr::LimitedGraphReader(graphreader); };
   // Separate out transition cost.
   sif::Cost transition_cost =
-      FORWARD ? costing_->TransitionCost(meta.edge, nodeinfo, pred, tile, reader_getter)
-              : costing_->TransitionCostReverse(meta.edge->localedgeidx(), nodeinfo, opp_edge,
-                                                opp_pred_edge, t2, pred.edgeid(), reader_getter,
-                                                static_cast<bool>(flow_sources & kDefaultFlowMask),
-                                                pred.internal_turn());
+      FORWARD
+          ? costing_->TransitionCost(meta.edge, nodeinfo, pred, tile, reader_getter, edge_destonly)
+          : costing_->TransitionCostReverse(meta.edge->localedgeidx(), nodeinfo, opp_edge,
+                                            opp_pred_edge, pred, t2, reader_getter,
+                                            static_cast<bool>(flow_sources & kDefaultFlowMask),
+                                            pred.internal_turn(), edge_destonly);
   newcost += transition_cost;
 
   // Check if edge is temporarily labeled and this path has less cost. If
@@ -342,9 +336,7 @@ inline bool BidirectionalAStar::ExpandInner(baldr::GraphReader& graphreader,
                                      (pred.closure_pruning() || !costing_->IsClosed(meta.edge, tile)),
                                      static_cast<bool>(flow_sources & kDefaultFlowMask),
                                      costing_->TurnType(pred.opp_local_idx(), nodeinfo, meta.edge),
-                                     restriction_idx, 0,
-                                     meta.edge->destonly() ||
-                                         (costing_->is_hgv() && meta.edge->destonly_hgv()),
+                                     restriction_idx, 0, edge_destonly,
                                      meta.edge->forwardaccess() & kTruckAccess,
                                      destonly_restriction_mask);
     adjacencylist_forward_.add(idx);
@@ -362,9 +354,7 @@ inline bool BidirectionalAStar::ExpandInner(baldr::GraphReader& graphreader,
                                      static_cast<bool>(flow_sources & kDefaultFlowMask),
                                      costing_->TurnType(meta.edge->localedgeidx(), nodeinfo, opp_edge,
                                                         opp_pred_edge),
-                                     restriction_idx, 0,
-                                     opp_edge->destonly() ||
-                                         (costing_->is_hgv() && opp_edge->destonly_hgv()),
+                                     restriction_idx, 0, edge_destonly,
                                      opp_edge->forwardaccess() & kTruckAccess,
                                      destonly_restriction_mask);
     adjacencylist_reverse_.add(idx);
@@ -381,7 +371,8 @@ inline bool BidirectionalAStar::ExpandInner(baldr::GraphReader& graphreader,
     expansion_callback_(graphreader, FORWARD ? meta.edge_id : opp_edge_id, prev_pred,
                         "bidirectional_astar", Expansion_EdgeStatus_reached, newcost.secs,
                         pred.path_distance() + meta.edge->length(), newcost.cost,
-                        static_cast<Expansion_ExpansionType>(expansion_direction), flow_sources);
+                        static_cast<Expansion_ExpansionType>(expansion_direction), flow_sources,
+                        TravelMode::TravelMode_INT_MAX_SENTINEL_DO_NOT_USE_);
   }
 
   // we've just added this edge to the queue, but we won't expand from it if it's a not-thru edge that
@@ -749,7 +740,8 @@ BidirectionalAStar::GetBestPath(valhalla::Location& origin,
         expansion_callback_(graphreader, fwd_pred.edgeid(), prev_pred, "bidirectional_astar",
                             Expansion_EdgeStatus_settled, fwd_pred.cost().secs,
                             fwd_pred.path_distance(), fwd_pred.cost().cost,
-                            Expansion_ExpansionType_forward, kNoFlowMask);
+                            Expansion_ExpansionType_forward, kNoFlowMask,
+                            TravelMode::TravelMode_INT_MAX_SENTINEL_DO_NOT_USE_);
       }
 
       // Prune path if predecessor is not a through edge or if the maximum
@@ -798,7 +790,8 @@ BidirectionalAStar::GetBestPath(valhalla::Location& origin,
         expansion_callback_(graphreader, rev_pred.edgeid(), prev_pred, "bidirectional_astar",
                             Expansion_EdgeStatus_settled, rev_pred.cost().secs,
                             rev_pred.path_distance(), rev_pred.cost().cost,
-                            Expansion_ExpansionType_reverse, kNoFlowMask);
+                            Expansion_ExpansionType_reverse, kNoFlowMask,
+                            TravelMode::TravelMode_INT_MAX_SENTINEL_DO_NOT_USE_);
       }
 
       // Prune path if predecessor is not a through edge
@@ -914,7 +907,8 @@ bool BidirectionalAStar::SetForwardConnection(GraphReader& graphreader, const BD
                                : edgelabels_forward_[pred.predecessor()].edgeid();
     expansion_callback_(graphreader, pred.edgeid(), prev_pred, "bidirectional_astar",
                         Expansion_EdgeStatus_connected, pred.cost().secs, pred.path_distance(),
-                        pred.cost().cost, Expansion_ExpansionType_forward, kNoFlowMask);
+                        pred.cost().cost, Expansion_ExpansionType_forward, kNoFlowMask,
+                        TravelMode::TravelMode_INT_MAX_SENTINEL_DO_NOT_USE_);
   }
 
   return true;
@@ -988,7 +982,8 @@ bool BidirectionalAStar::SetReverseConnection(GraphReader& graphreader, const BD
     expansion_callback_(graphreader, fwd_edge_id, prev_pred, "bidirectional_astar",
                         Expansion_EdgeStatus_connected, fwd_pred.cost().secs,
                         fwd_pred.path_distance(), fwd_pred.cost().cost,
-                        Expansion_ExpansionType_reverse, kNoFlowMask);
+                        Expansion_ExpansionType_reverse, kNoFlowMask,
+                        TravelMode::TravelMode_INT_MAX_SENTINEL_DO_NOT_USE_);
   }
 
   return true;
@@ -1063,15 +1058,16 @@ void BidirectionalAStar::SetOrigin(GraphReader& graphreader,
 
     // we call this to find out if we're starting on access restrictions with a local traffic
     // exemption and push this info into the label
+    bool edge_destonly = false;
     auto destonly_restriction_mask =
-        costing_->GetExemptedAccessRestrictions(directededge, tile, edgeid);
+        costing_->GetExemptedAccessRestrictions(directededge, tile, edgeid,
+                                                time_info.valid ? time_info.local_time : 0,
+                                                time_info.timezone_index, &edge_destonly);
 
     edgelabels_forward_.emplace_back(kInvalidLabel, edgeid, directededge, cost, sortcost, dist, mode_,
                                      kInvalidRestriction, !(costing_->IsClosed(directededge, tile)),
                                      static_cast<bool>(flow_sources & kDefaultFlowMask),
-                                     sif::InternalTurn::kNoTurn, 0,
-                                     directededge->destonly() ||
-                                         (costing_->is_hgv() && directededge->destonly_hgv()),
+                                     sif::InternalTurn::kNoTurn, 0, edge_destonly,
                                      directededge->forwardaccess() & kTruckAccess,
                                      destonly_restriction_mask);
     adjacencylist_forward_.add(idx);
@@ -1081,7 +1077,8 @@ void BidirectionalAStar::SetOrigin(GraphReader& graphreader,
       expansion_callback_(graphreader, edgeid, GraphId{}, "bidirectional_astar",
                           Expansion_EdgeStatus_reached, cost.secs,
                           static_cast<uint32_t>(edge.distance() + 0.5), cost.cost,
-                          Expansion_ExpansionType_forward, flow_sources);
+                          Expansion_ExpansionType_forward, flow_sources,
+                          TravelMode::TravelMode_INT_MAX_SENTINEL_DO_NOT_USE_);
     }
 
     // Set the initial not_thru flag to false. There is an issue with not_thru
@@ -1171,17 +1168,18 @@ void BidirectionalAStar::SetDestination(GraphReader& graphreader,
 
     // we call this to find out if we're starting on access restrictions with a local traffic
     // exemption and push this info into the label
+    bool edge_destonly = false;
     auto destonly_restriction_mask =
-        costing_->GetExemptedAccessRestrictions(directededge, tile, edgeid);
+        costing_->GetExemptedAccessRestrictions(directededge, tile, edgeid,
+                                                time_info.valid ? time_info.local_time : 0,
+                                                time_info.timezone_index, &edge_destonly);
 
     edgelabels_reverse_.emplace_back(kInvalidLabel, opp_edge_id, edgeid, opp_dir_edge, cost, sortcost,
                                      dist, mode_, c, !opp_dir_edge->not_thru(),
                                      !(costing_->IsClosed(directededge, tile)),
                                      static_cast<bool>(flow_sources & kDefaultFlowMask),
                                      sif::InternalTurn::kNoTurn, kInvalidRestriction, 0,
-                                     directededge->destonly() ||
-                                         (costing_->is_hgv() && directededge->destonly_hgv()),
-                                     directededge->forwardaccess() & kTruckAccess,
+                                     edge_destonly, directededge->forwardaccess() & kTruckAccess,
                                      destonly_restriction_mask);
     adjacencylist_reverse_.add(idx);
 
@@ -1190,7 +1188,8 @@ void BidirectionalAStar::SetDestination(GraphReader& graphreader,
       expansion_callback_(graphreader, edgeid, GraphId{}, "bidirectional_astar",
                           Expansion_EdgeStatus_reached, cost.secs,
                           static_cast<uint32_t>(edge.distance() + 0.5), cost.cost,
-                          Expansion_ExpansionType_reverse, flow_sources);
+                          Expansion_ExpansionType_reverse, flow_sources,
+                          TravelMode::TravelMode_INT_MAX_SENTINEL_DO_NOT_USE_);
     }
 
     // Set the initial not_thru flag to false. There is an issue with not_thru

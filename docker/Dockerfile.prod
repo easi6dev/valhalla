@@ -45,7 +45,7 @@ RUN apt-get update && apt-get install -y \
     libcurl4-openssl-dev \
     libssl-dev \
     libprotobuf-dev protobuf-compiler \
-    libsqlite3-dev libspatialite-dev libsqlite3-mod-spatialite \
+    libsqlite3-dev libspatialite-dev libsqlite3-mod-spatialite spatialite-bin \
     liblz4-dev libgeos-dev libgeos++-dev \
     liblua5.3-dev libluajit-5.1-dev \
     libzmq3-dev libczmq-dev \
@@ -110,9 +110,9 @@ RUN valhalla_build_tiles  --version 2>&1 | head -1 \
 # CMakeLists.txt expects them at: ${VALHALLA_SOURCE_DIR}/build/src/valhalla/proto/
 RUN mkdir -p build/src/valhalla/proto && \
     protoc \
-      --proto_path=proto \
+      --proto_path=proto/descriptors \
       --cpp_out=build/src/valhalla/proto \
-      proto/*.proto
+      proto/descriptors/*.proto
 
 # ── Step C: Populate libvalhalla.so* in resources from the build output ─────
 # *.so / *.so.* are gitignored so they are absent from the build context.

@@ -36,6 +36,7 @@ out/
 vcpkg*/
 *.log
 custom_files/
+redoc-static.html
 
 # Gradle
 .gradle/
@@ -61,6 +62,10 @@ src/bindings/java/build/
 # python
 .venv
 venv
+
+# nodejs
+node_modules/
+*.node
 
 # clangd
 .cache/
@@ -159,3 +164,6 @@ docs/*/.tada-metrics.json
 docs/*/.tada-log.json
 docs/*/context.md
 docs/audit
+proto/typescript/src
+proto/python/src
+proto/typescript/valhallajs-proto-*
