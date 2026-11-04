@@ -22,6 +22,11 @@ on:
     branches:
       - master
       - main
+    # Docs-only pushes (the service digest, the data catalog mirror) deploy nothing.
+    # apps/*/docs/** is needed because docs/** does not match the monorepo app folders.
+    paths-ignore:
+      - 'docs/**'
+      - 'apps/*/docs/**'
   workflow_dispatch:
 
 jobs:
