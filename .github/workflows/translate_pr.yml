@@ -61,6 +61,15 @@
 #   stale once the source content changed. Every other item in the PR keeps
 #   the normal "already translated, skip" behavior.
 #
+# Render safety: an unclosed HTML comment (`<!-- foo` with no `-->`) in an item
+# swallows everything after it, including the translation block and the markers
+# appended here (their `-->` is what finally closes it), so the whole item
+# renders blank. translate-pr.js therefore neutralizes unclosed comments in the
+# original and in the LLM output, refuses to write any body whose translation
+# block would be hidden, and repairs already-written items that hide themselves
+# even though they carry the TRANSLATED marker. Tests: translate-pr.test.js
+# (run in this repository by test-translate-pr.yml).
+#
 # Reuses the same org secrets as claude-pr-review-spring-boot.yml
 # (ORG_LITELLM_API_KEY, ORG_LITELLM_ENDPOINT) — no additional setup needed.
 

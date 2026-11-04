@@ -34,6 +34,18 @@
 // Content too short to be worth translating ("LGTM", "확인했습니다") is skipped
 // without any write — no marker, no LLM call. See isTooShortToTranslate.
 //
+// Render safety (see the "Render safety" section below): an unclosed HTML
+// comment (`<!-- foo`, no `-->`) in an item's text swallows everything after it
+// — including the translation block and our own markers, whose `-->` is what
+// finally closes it — so the whole item renders blank (observed live: a bot
+// reply quoting another comment left a stray `<!-- translated` behind). Three
+// layers guard against that: (1) unclosed comments are neutralized in the
+// original and in the LLM output before anything is written, (2) the finished
+// body is verified to render its translation block and the write is refused
+// otherwise, and (3) an already-written body that hides itself this way is
+// detected (isTranslationHidden) and repaired on the next event even though it
+// carries the TRANSLATED marker.
+//
 // On translation failure: the original body is restored and the failure
 // is logged via core.warning + core.summary (NOT written to the PR body).
 //
@@ -268,12 +280,21 @@ function buildTranslatingBody(original) {
 }
 
 function buildTranslatedBody(original, result) {
+  // Everything interpolated below is scrubbed first so that no input — the
+  // original, the LLM's translation or its language label — can swallow the
+  // markup around it. assertRenderSafe then verifies the finished body.
+  const safeOriginal = neutralizeUnclosedHtmlComments(stripArtifacts(original));
+  const safeTranslation = sanitizeTranslation(result.translation);
+  if (!safeTranslation) {
+    throw new Error("empty translation after sanitizing");
+  }
   const isEnglish =
     result.language && result.language.toLowerCase() === "english";
-  if (isEnglish) {
-    return `${original}\n\n${TRANSLATION_DETAILS_OPEN}\n<summary>Korean</summary>\n\n${result.translation}\n\n</details>\n${MARKERS.TRANSLATED}`;
-  }
-  return `${MARKERS.TRANSLATED}\n${result.translation}\n\n${TRANSLATION_DETAILS_OPEN}\n<summary>${result.language}</summary>\n\n${original}\n\n</details>`;
+  const body = isEnglish
+    ? `${safeOriginal}\n\n${TRANSLATION_DETAILS_OPEN}\n<summary>Korean</summary>\n\n${safeTranslation}\n\n</details>\n${MARKERS.TRANSLATED}`
+    : `${MARKERS.TRANSLATED}\n${safeTranslation}\n\n${TRANSLATION_DETAILS_OPEN}\n<summary>${sanitizeSummaryLabel(result.language)}</summary>\n\n${safeOriginal}\n\n</details>`;
+  assertRenderSafe(body);
+  return body;
 }
 
 // Structural inverse of buildTranslatedBody: pulls the original and the
@@ -336,6 +357,193 @@ function stripArtifacts(body) {
     .trim();
 }
 
+// --- Render safety: unclosed HTML comments ---
+//
+// Markdown renderers treat `<!--` as the start of a comment that only a later
+// `-->` can end; with no `-->` it runs to the end of the item. Because we
+// append `<details>` and `<!-- translated-by-claude -->` after the original,
+// an unclosed `<!--` in the original is "closed" by OUR marker and hides the
+// entire translation block along with the text in between. The helpers below
+// find such comments and make sure we never write them.
+
+// What is left of one of OUR markers after something truncated it
+// (`<!-- translated`, `<!-- translation-skip`, `<!-- translated-by-claude --`).
+// Pure noise, so it is dropped instead of escaped. Anchored at the `<!--`.
+const TRUNCATED_MARKER_FRAGMENT =
+  /^<!--[ \t]*translat[a-z-]*[ \t]*-{0,2}[ \t]*(?=\r?\n|$)/i;
+
+// CommonMark inline code span: a backtick run closed by a run of the same
+// length. Single-line on purpose: if a span were allowed to cross a blank line
+// it could mask a genuinely unclosed comment and defeat the guard.
+const INLINE_CODE_SPAN = /(?<!`)(`+)(?!`)[^\n]*?[^`\n]\1(?!`)/g;
+
+// `<!--` inside code is literal text, not a comment — leave those alone.
+// Returns [start, end) offset ranges of fenced code blocks and inline spans.
+function findCodeRanges(text) {
+  const fenceRanges = [];
+  let openFence = null;
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    const lineEnd = offset + line.length;
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})([^\n]*)$/);
+    if (!openFence) {
+      const isBacktickFenceWithBacktickInInfo =
+        fence && fence[1][0] === "`" && fence[2].includes("`");
+      if (fence && !isBacktickFenceWithBacktickInInfo) {
+        openFence = { char: fence[1][0], length: fence[1].length, start: offset };
+      }
+    } else if (
+      fence &&
+      fence[1][0] === openFence.char &&
+      fence[1].length >= openFence.length &&
+      fence[2].trim() === ""
+    ) {
+      fenceRanges.push([openFence.start, lineEnd]);
+      openFence = null;
+    }
+    offset = lineEnd + 1;
+  }
+  // An unterminated fence runs to the end of the document (CommonMark).
+  if (openFence) fenceRanges.push([openFence.start, text.length]);
+
+  const proseSegments = [];
+  let cursor = 0;
+  for (const [start, end] of fenceRanges) {
+    proseSegments.push([cursor, start]);
+    cursor = end;
+  }
+  proseSegments.push([cursor, text.length]);
+
+  const inlineRanges = [];
+  for (const [start, end] of proseSegments) {
+    for (const match of text.slice(start, end).matchAll(INLINE_CODE_SPAN)) {
+      inlineRanges.push([
+        start + match.index,
+        start + match.index + match[0].length,
+      ]);
+    }
+  }
+  return [...fenceRanges, ...inlineRanges];
+}
+
+// Classifies every `<!--` outside code as closed ([start, end) of the whole
+// comment) or unclosed (start offset only). The `-->` search starts two
+// characters in so `<!-->` counts as closed, as it does for CommonMark and the
+// HTML5 parser.
+function scanHtmlComments(text) {
+  const codeRanges = findCodeRanges(text);
+  const isInCode = (index) =>
+    codeRanges.some(([start, end]) => index >= start && index < end);
+  const closed = [];
+  const unclosed = [];
+  let from = 0;
+  while (true) {
+    const start = text.indexOf("<!--", from);
+    if (start === -1) break;
+    if (isInCode(start)) {
+      from = start + 4;
+      continue;
+    }
+    const closeIndex = text.indexOf("-->", start + 2);
+    if (closeIndex === -1) {
+      unclosed.push(start);
+      from = start + 4;
+      continue;
+    }
+    closed.push([start, closeIndex + 3]);
+    from = closeIndex + 3;
+  }
+  return { closed, unclosed };
+}
+
+function removeRanges(text, ranges) {
+  let result = "";
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    result += text.slice(cursor, start);
+    cursor = end;
+  }
+  return result + text.slice(cursor);
+}
+
+function hasUnclosedHtmlComment(text) {
+  return scanHtmlComments(text).unclosed.length > 0;
+}
+
+// Makes `text` safe to place in front of our appended markup. A truncated
+// remnant of one of our markers is dropped; any other unclosed `<!--` is
+// escaped to `&lt;!--`, which renders as the same literal `<!--` the reader
+// would see anyway, minus the power to swallow what follows. Balanced
+// comments (author-intended, invisible) and code are left untouched.
+function neutralizeUnclosedHtmlComments(text) {
+  if (!text) return text;
+  const { unclosed } = scanHtmlComments(text);
+  if (unclosed.length === 0) return text;
+
+  let result = "";
+  let cursor = 0;
+  let droppedFragment = false;
+  for (const start of unclosed) {
+    const fragment = text.slice(start).match(TRUNCATED_MARKER_FRAGMENT);
+    if (fragment) {
+      // Also drop the indentation in front of it so no whitespace-only line
+      // is left behind.
+      result += text.slice(cursor, start).replace(/[ \t]+$/, "");
+      cursor = start + fragment[0].length;
+      droppedFragment = true;
+    } else {
+      result += `${text.slice(cursor, start)}&lt;!--`;
+      cursor = start + 4;
+    }
+  }
+  result += text.slice(cursor);
+  return droppedFragment ? result.replace(/\n{3,}/g, "\n\n") : result;
+}
+
+// The LLM is told never to emit markers, <details> or HTML comments, but the
+// prompt is not a guarantee. Scrub its output the same way the original is
+// scrubbed, plus the opt-out marker, which would otherwise make the written
+// item skip itself forever.
+function sanitizeTranslation(translation) {
+  return neutralizeUnclosedHtmlComments(
+    stripArtifacts(translation).split(MARKERS.SKIP).join(""),
+  ).trim();
+}
+
+// `<summary>` content comes from the LLM too; keep it a plain one-line label.
+function sanitizeSummaryLabel(language) {
+  const label = String(language ?? "")
+    .replace(/[<>\r\n]/g, "")
+    .trim();
+  return label || "Original";
+}
+
+// A body that already carries the TRANSLATED marker but is nevertheless
+// invisible: take the marker away and an unclosed comment is left over, i.e.
+// the marker's `-->` was the only thing closing it. Such an item must be
+// repaired even though it looks "already translated".
+function isTranslationHidden(body) {
+  if (!body || !body.includes(MARKERS.TRANSLATED)) return false;
+  return hasUnclosedHtmlComment(body.split(MARKERS.TRANSLATED).join(""));
+}
+
+// Last line of defense, run on every body we are about to write: refuse it
+// unless the translation block would actually be visible when rendered.
+function assertRenderSafe(body) {
+  const { closed, unclosed } = scanHtmlComments(body);
+  if (unclosed.length > 0) {
+    throw new Error(
+      `Refusing to write a body with an unclosed HTML comment (offset ${unclosed[0]}): it would hide the rest of the item`,
+    );
+  }
+  const visible = removeRanges(body, closed);
+  if (!visible.includes(TRANSLATION_DETAILS_OPEN) || !visible.includes("</details>")) {
+    throw new Error(
+      "Refusing to write a body whose translation block would be hidden by an HTML comment",
+    );
+  }
+}
+
 // Drops everything a translator has no use for — HTML comments, images,
 // media/markup tags, @mentions, URLs, emoji — leaving the prose a human would
 // actually read. Shared by needsTranslation (is there any prose?) and
@@ -384,7 +592,13 @@ function needsTranslation(body, { ignoreTranslatedMarker = false } = {}) {
   // Already translated → skip. To force re-translation, manually delete
   // the TRANSLATED marker (the bot picks it up on the next event), or edit
   // the item yourself (see ignoreTranslatedMarker above).
-  if (!ignoreTranslatedMarker && body.includes(MARKERS.TRANSLATED)) {
+  // ...unless the translated body hides itself (see isTranslationHidden), in
+  // which case it is repaired rather than trusted.
+  if (
+    !ignoreTranslatedMarker &&
+    body.includes(MARKERS.TRANSLATED) &&
+    !isTranslationHidden(body)
+  ) {
     return false;
   }
   // TRANSLATING marker is allowed (recovery from cancelled runs).
@@ -461,7 +675,7 @@ async function syncFromEditedTranslation(adapter, after, core) {
 async function translateAndUpdate(
   adapter,
   core,
-  { forceRetranslate = false, beforeBody } = {},
+  { forceRetranslate = false, beforeBody, translate = translateText } = {},
 ) {
   const rawBody = adapter.getBody();
   if (!needsTranslation(rawBody, { ignoreTranslatedMarker: forceRetranslate })) {
@@ -485,7 +699,9 @@ async function translateAndUpdate(
     }
   }
 
-  const original = stripArtifacts(rawBody);
+  // Strip our own artifacts first, THEN neutralize: the marker we just removed
+  // is what used to "close" a stray `<!--`, so the order matters.
+  const original = neutralizeUnclosedHtmlComments(stripArtifacts(rawBody));
   if (!original) return false;
 
   // Measured on the artifact-stripped text, never on rawBody: a leftover
@@ -502,7 +718,8 @@ async function translateAndUpdate(
     // since nothing else overwrites them.
     if (
       rawBody.includes(MARKERS.TRANSLATING) ||
-      (forceRetranslate && rawBody.includes(MARKERS.TRANSLATED))
+      (forceRetranslate && rawBody.includes(MARKERS.TRANSLATED)) ||
+      isTranslationHidden(rawBody)
     ) {
       await safeUpdate(adapter, original, core, "too-short cleanup");
     }
@@ -518,7 +735,7 @@ async function translateAndUpdate(
   }
 
   try {
-    const result = await translateText(original);
+    const result = await translate(original);
     if (isEchoOfInput(original, result)) {
       // Undo the in-progress label; no marker is written, so the item is
       // re-evaluated on the next event like a too-short skip.
@@ -872,5 +1089,12 @@ module.exports = {
     translateAndUpdate,
     parseTranslatedBody,
     syncFromEditedTranslation,
+    findCodeRanges,
+    scanHtmlComments,
+    hasUnclosedHtmlComment,
+    neutralizeUnclosedHtmlComments,
+    sanitizeTranslation,
+    isTranslationHidden,
+    assertRenderSafe,
   },
 };
